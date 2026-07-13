@@ -39,6 +39,20 @@ Graphviz のインストール（Ubuntu/Debian）：
 sudo apt install graphviz
 ```
 
+絵文字アイコン（🌐 🔀 🔌 🧱 💻）を図に表示するには、絵文字フォントも必要です。
+未インストールだと `01F310` のようなコードポイントの箱で表示されます。
+
+```bash
+# システム全体にインストールする場合
+sudo apt install fonts-noto-color-emoji
+
+# sudo が使えない場合はユーザー領域に配置
+mkdir -p ~/.local/share/fonts
+curl -fsSL -o ~/.local/share/fonts/NotoColorEmoji.ttf \
+  https://github.com/googlefonts/noto-emoji/raw/main/fonts/NotoColorEmoji.ttf
+fc-cache -f
+```
+
 ## セットアップ
 
 ```bash
