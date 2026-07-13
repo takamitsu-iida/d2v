@@ -1,0 +1,412 @@
+module iida-network-model {
+  yang-version 1.1;
+  namespace "urn:iida:params:xml:ns:yang:iida-network-model";
+  prefix "nnm";
+
+  import ietf-inet-types {
+    prefix "inet";
+  }
+  import ietf-yang-types {
+    prefix "yang";
+  }
+
+  organization "IIDA Inc.";
+  contact "support@iida.com";
+  description
+    "A concise YANG model for representing network topology across physical, Layer 2, and Layer 3.";
+
+  revision "2026-07-01" {
+    description "Add asn/loopback to device, ip-address to interface,
+                 ethernet enum to port-type, and replace flat connection
+                 endpoints with endpoint list for IP CLOS topology support.";
+  }
+
+  revision "2023-11-20" {
+    description "Initial version, inspired by OpenConfig-like structure.";
+  }
+
+  // ===========================================================================
+  // Top-level container for the entire network configuration
+  // ===========================================================================
+  container network-model {
+    description "Top-level container for the entire network configuration.";
+
+    // ===========================================================================
+    // Common Definitions and Type-Defs
+    // ===========================================================================
+    grouping device-identification {
+      leaf device-id {
+        type string {
+          pattern '[a-zA-Z0-9_-]+';
+          length "1..64";
+        }
+        description "Unique identifier for a network device.";
+      }
+      leaf device-name {
+        type string {
+          length "1..128";
+        }
+        description "Human-readable name of the device.";
+      }
+      leaf device-type {
+        type enumeration {
+          enum "router";
+          enum "switch";
+          enum "server";
+          enum "firewall";
+          enum "host";
+          enum "load-balancer";
+        }
+        description "Functional type of the device.";
+      }
+    }
+
+    grouping interface-identification {
+      leaf interface-id {
+        type string {
+          pattern '[a-zA-Z0-9_./-]+';
+          length "1..128";
+        }
+        description "Unique identifier for an interface within a device (e.g., Gi0/1, eth0).
+                     This should be the canonical name that is used in configuration.";
+      }
+    }
+
+    // ===========================================================================
+    // Physical Layer (Devices and Physical Ports/Connections)
+    // ===========================================================================
+    container physical-layer {
+      description "Details about physical devices and their interconnections.";
+
+      list device {
+        key "device-id";
+        description "List of all physical network devices.";
+        uses device-identification;
+        leaf vendor {
+          type string;
+          description "Vendor of the device (e.g., Cisco, Juniper).";
+        }
+        leaf model {
+          type string;
+          description "Model name of the device.";
+        }
+        leaf os-version {
+          type string;
+          description "Operating System version of the device.";
+        }
+        leaf location {
+          type string;
+          description "Physical location of the device (e.g., 'Rack-A01', 'Building X, Room Y').";
+        }
+        leaf asn {
+          type uint32;
+          description "BGP Autonomous System Number assigned to this device.";
+        }
+        leaf loopback {
+          type inet:ipv4-prefix;
+          description "Primary loopback IP address in CIDR notation (e.g., 10.0.0.1/32).";
+        }
+        leaf zone {
+          type string {
+            length "1..64";
+          }
+          description
+            "Diagram zone for grouping devices into Graphviz subgraph clusters.
+             Examples: 'core', 'dmz', 'branch-a', 'wan-edge'";
+        }
+
+        list interface {
+          key "interface-id";
+          description "Physical interfaces of the device.";
+          uses interface-identification;
+          leaf description {
+            type string;
+            description "Description of the interface.";
+          }
+          leaf port-type {
+            type enumeration {
+              enum "ethernet";     // Generic Ethernet (media type unspecified)
+              enum "ethernet-铜"; // Copper Ethernet
+              enum "ethernet-光"; // Fiber Ethernet
+              enum "serial";
+              enum "other";
+            }
+            description "Indicates the physical port's media type.";
+          }
+          leaf hardware-mac-address {
+            type yang:mac-address;
+            description "MAC address of the physical interface.";
+          }
+          leaf port-speed-gbps {
+            type uint16;
+            units "Gbps";
+            description "Nominal speed of the port in Gbps.";
+          }
+          leaf ip-address {
+            type inet:ipv4-prefix;
+            description "IP address with prefix length assigned to this interface
+                         in CIDR notation (e.g., 10.1.0.0/31, 10.0.0.1/32).";
+          }
+          // 管理状態、運用状態など、OpenConfigではstateデータになるような項目は今回は割愛。
+        }
+      }
+
+      list physical-connection {
+        key "connection-id";
+        description "Direct physical cable connections between interfaces.";
+        leaf connection-id {
+          type string;
+          description "Unique identifier for the physical connection.";
+        }
+        list endpoint {
+          key "device-id";
+          min-elements 2;
+          max-elements 2;
+          description "The two endpoint devices and interfaces of this physical connection.";
+          leaf device-id {
+            type leafref {
+              path "../../../device/device-id";
+            }
+            description "Identifier of the endpoint device.";
+          }
+          leaf interface-id {
+            type leafref {
+              path "../../../device[device-id=current()/../device-id]/interface/interface-id";
+            }
+            description "Identifier of the interface on the endpoint device.";
+          }
+        }
+        leaf cable-type {
+          type string; // e.g., "Cat6", "SMF" (Single-Mode Fiber)
+          description "Type of cable used (e.g., Cat6, OS2 fiber).";
+        }
+        leaf length-meters {
+          type decimal64 {
+            fraction-digits 2;
+            range "0.01 .. max";
+          }
+          units "meters";
+          description "Approximate length of the cable in meters.";
+        }
+      }
+    } // end physical-layer
+
+    // ===========================================================================
+    // Layer 2 (VLANs and Layer 2 Configuration on Interfaces)
+    // ===========================================================================
+    container layer2-layer {
+      description "Details about VLANs and Layer 2 configurations.";
+
+      list vlan {
+        key "vlan-id";
+        description "Definition of VLANs configured in the network.";
+        leaf vlan-id {
+          type uint16 {
+            range "1..4094";
+          }
+          description "VLAN identifier.";
+        }
+        leaf name {
+          type string;
+          description "Human-readable name for the VLAN.";
+        }
+      }
+
+      list layer2-interface-config {
+        key "device-id interface-id";
+        description "Layer 2 configuration for a specific interface on a device.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Reference to the physical device.";
+        }
+        leaf interface-id {
+          type leafref {
+            path "../../../physical-layer/device[device-id=current()/../device-id]/interface/interface-id";
+          }
+          description "Reference to the physical interface on that device.";
+        }
+        leaf l2-mode {
+          type enumeration {
+            enum "access";
+            enum "trunk";
+            enum "layer3"; // Interface configured for L3 routing, no L2 switching
+          }
+          description "Layer 2 mode of the interface.";
+        }
+        leaf access-vlan {
+          when "../l2-mode = 'access'" {
+            description "Required for access mode.";
+          }
+          type leafref {
+            path "../../vlan/vlan-id";
+          }
+          mandatory true;
+          description "VLAN ID for access ports.";
+        }
+        list trunk-vlans {
+          when "../l2-mode = 'trunk'" {
+            description "List of allowed VLAN IDs for trunk ports.";
+          }
+          key "vlan-id";
+          leaf vlan-id {
+            type leafref {
+              path "../../../vlan/vlan-id";
+            }
+            description "VLAN ID allowed on this trunk.";
+          }
+        }
+        leaf native-vlan {
+          when "../l2-mode = 'trunk'";
+          type leafref {
+            path "../../vlan/vlan-id";
+          }
+          description "Native VLAN ID for trunk ports.";
+        }
+        // STP settings, EtherChannel etc. can be added here
+      }
+    } // end layer2-layer
+
+    // ===========================================================================
+    // Layer 3 (IP Addresses, Subnets, Routing)
+    // ===========================================================================
+    container layer3-layer {
+      description "Details about IP addressing and routing configurations.";
+
+      list ip-subnet {
+        key "subnet-id";
+        description "Definition of IP subnets used in the network.";
+        leaf subnet-id {
+          type string;
+          description "Unique identifier for the subnet.";
+        }
+        leaf prefix {
+          type inet:ipv4-prefix; // Example: 192.168.1.0/24
+          description "IP network prefix in CIDR format.";
+        }
+        leaf description {
+          type string;
+          description "Description of the subnet.";
+        }
+        leaf associated-vlan-id {
+          type leafref {
+            path "../../../layer2-layer/vlan/vlan-id";
+          }
+          mandatory false; // Not all subnets are directly associated with a VLAN
+          description "Optional: Reference to the VLAN associated with this subnet.";
+        }
+      }
+
+      list layer3-interface-config {
+        key "device-id interface-id";
+        description "Layer 3 configuration (IP addressing) for a specific interface on a device.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Reference to the physical device.";
+        }
+        leaf interface-id {
+          type leafref {
+            path "../../../physical-layer/device[device-id=current()/../device-id]/interface/interface-id";
+          }
+          description "Reference to the physical interface on that device.";
+        }
+        list addresses {
+          key "ip-address";
+          description "IP addresses configured on this interface.";
+          leaf ip-address {
+            type inet:ipv4-address; // Example: 192.168.1.1
+            description "IP address configured on the interface.";
+          }
+          leaf prefix-length {
+            type uint8 {
+              range "0..32";
+            }
+            description "Prefix length for the IP address.";
+          }
+          leaf associated-subnet-id {
+            type leafref {
+              path "../../../ip-subnet/subnet-id";
+            }
+            mandatory false;
+            description "Optional: Reference to the IP subnet this address belongs to.";
+          }
+        }
+        leaf ip-routing-enabled {
+          type boolean;
+          default "true";
+          description "If IP routing is enabled on this interface.";
+        }
+        // Example for routing protocols (simplified)
+        container ipv4-routing {
+          description "IPv4 routing settings for the interface.";
+          leaf ospf-area {
+            type string;
+            description "OSPF area ID configured on this interface (e.g., '0.0.0.0', '1').";
+          }
+        }
+        // ACLs, NATs, HSRP/VRRP etc. would be additional sub-containers/lists here
+      }
+
+      list host-config {
+        key "device-id";
+        description "Layer 3 configuration (IP addressing) for host devices.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Reference to the physical host device.";
+        }
+        leaf primary-ip-address {
+          type inet:ipv4-address;
+          description "Primary IP address of the host.";
+        }
+        leaf primary-prefix-length {
+          type uint8 {
+            range "0..32";
+          }
+          description "Prefix length for the primary IP address.";
+        }
+        leaf default-gateway {
+          type inet:ipv4-address;
+          description "Default gateway IP address for the host.";
+        }
+        leaf associated-subnet-id {
+          type leafref {
+            path "../../ip-subnet/subnet-id";
+          }
+          mandatory false;
+          description "Optional: Reference to the IP subnet this host belongs to.";
+        }
+      }
+
+      list static-route {
+        key "destination-prefix next-hop";
+        description "Global static routes configured on routing devices.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device on which this static route is configured.";
+        }
+        leaf destination-prefix {
+          type inet:ipv4-prefix;
+          description "Destination network prefix in CIDR format.";
+        }
+        leaf next-hop {
+          type inet:ipv4-address;
+          description "Next-hop IP address.";
+        }
+        leaf administrative-distance {
+          type uint8;
+          default "1";
+          description "Administrative distance of the route.";
+        }
+      }
+      // Global routing protocol configurations (OSPF, BGP, etc.) can be added here
+    } // end layer3-layer
+
+  } // end network-model
+}

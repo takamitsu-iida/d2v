@@ -1,0 +1,141 @@
+network-model:
+  physical-layer:
+    device:
+      - device-id: "router-01"
+        device-name: "Internet Router"
+        device-type: router
+        zone: wan-edge
+        asn: 65000
+        loopback: "10.0.0.1/32"
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To ISP"
+            ip-address: "203.0.113.1/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Firewall"
+            ip-address: "10.1.0.1/30"
+
+      - device-id: "fw-01"
+        device-name: "Edge Firewall"
+        device-type: firewall
+        zone: wan-edge
+        loopback: "10.0.0.2/32"
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To Router"
+            ip-address: "10.1.0.2/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Core Switch"
+            ip-address: "10.1.1.1/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To DMZ Switch"
+            ip-address: "10.1.2.1/30"
+
+      - device-id: "core-sw-01"
+        device-name: "Core L3 Switch"
+        device-type: switch
+        zone: core
+        loopback: "10.0.0.3/32"
+        interface:
+          - interface-id: "GigabitEthernet1/0/1"
+            description: "To Firewall"
+            ip-address: "10.1.1.2/30"
+          - interface-id: "GigabitEthernet1/0/2"
+            description: "To Office Switch"
+            ip-address: "10.1.3.1/30"
+
+      - device-id: "dmz-sw-01"
+        device-name: "DMZ Switch"
+        device-type: switch
+        zone: dmz
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Firewall"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Web Server"
+
+      - device-id: "web-server-01"
+        device-name: "Web Server"
+        device-type: server
+        zone: dmz
+        interface:
+          - interface-id: "eth0"
+            description: "DMZ LAN"
+            ip-address: "10.1.2.10/24"
+
+      - device-id: "office-sw-01"
+        device-name: "Office L2 Switch"
+        device-type: switch
+        zone: office
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Core"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Client PC"
+
+      - device-id: "pc-01"
+        device-name: "Client PC"
+        device-type: host
+        zone: office
+        interface:
+          - interface-id: "eth0"
+            description: "LAN"
+            ip-address: "10.1.3.10/24"
+
+    physical-connection:
+      - connection-id: "router-01__fw-01"
+        endpoint:
+          - device-id: "router-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/0"
+
+      - connection-id: "fw-01__core-sw-01"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/1"
+
+      - connection-id: "fw-01__dmz-sw-01"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "dmz-sw-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "dmz-sw-01__web-server-01"
+        endpoint:
+          - device-id: "dmz-sw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "web-server-01"
+            interface-id: "eth0"
+
+      - connection-id: "core-sw-01__office-sw-01"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/2"
+          - device-id: "office-sw-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "office-sw-01__pc-01"
+        endpoint:
+          - device-id: "office-sw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "pc-01"
+            interface-id: "eth0"
+
+  layer3-layer:
+    ip-subnet:
+      - subnet-id: "wan-link"
+        prefix: "10.1.0.0/30"
+        description: "router-01 to fw-01"
+      - subnet-id: "fw-core-link"
+        prefix: "10.1.1.0/30"
+        description: "fw-01 to core-sw-01"
+      - subnet-id: "dmz-segment"
+        prefix: "10.1.2.0/24"
+        description: "DMZ network"
+      - subnet-id: "office-segment"
+        prefix: "10.1.3.0/24"
+        description: "Office LAN"

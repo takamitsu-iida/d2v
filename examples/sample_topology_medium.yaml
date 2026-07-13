@@ -1,0 +1,482 @@
+network-model:
+  physical-layer:
+    device:
+      # ── WAN / エッジゾーン ────────────────────────────────────────
+      - device-id: "router-01"
+        device-name: "Internet Router"
+        device-type: router
+        zone: wan-edge
+        asn: 65000
+        loopback: "10.0.0.1/32"
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To ISP"
+            ip-address: "203.0.113.1/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Firewall"
+            ip-address: "10.1.0.1/30"
+
+      - device-id: "fw-01"
+        device-name: "Edge Firewall"
+        device-type: firewall
+        zone: wan-edge
+        loopback: "10.0.0.2/32"
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To Router"
+            ip-address: "10.1.0.2/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Core-SW-01"
+            ip-address: "10.1.1.1/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Core-SW-02"
+            ip-address: "10.1.2.1/30"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To DMZ Switch"
+            ip-address: "10.1.7.1/30"
+
+      # ── コアゾーン ───────────────────────────────────────────────
+      - device-id: "core-sw-01"
+        device-name: "Core L3 Switch #1"
+        device-type: switch
+        zone: core
+        loopback: "10.0.0.3/32"
+        interface:
+          - interface-id: "GigabitEthernet1/0/1"
+            description: "To Firewall"
+            ip-address: "10.1.1.2/30"
+          - interface-id: "GigabitEthernet1/0/2"
+            description: "Inter-Core Link"
+            ip-address: "10.1.3.1/30"
+          - interface-id: "GigabitEthernet1/0/3"
+            description: "To Server Dist"
+            ip-address: "10.1.4.1/30"
+          - interface-id: "GigabitEthernet1/0/4"
+            description: "To Office Dist"
+            ip-address: "10.1.6.1/30"
+
+      - device-id: "core-sw-02"
+        device-name: "Core L3 Switch #2"
+        device-type: switch
+        zone: core
+        loopback: "10.0.0.4/32"
+        interface:
+          - interface-id: "GigabitEthernet1/0/1"
+            description: "To Firewall"
+            ip-address: "10.1.2.2/30"
+          - interface-id: "GigabitEthernet1/0/2"
+            description: "Inter-Core Link"
+            ip-address: "10.1.3.2/30"
+          - interface-id: "GigabitEthernet1/0/3"
+            description: "To Server Dist (redundant)"
+            ip-address: "10.1.5.1/30"
+          - interface-id: "GigabitEthernet1/0/4"
+            description: "To Mgmt Switch"
+            ip-address: "10.1.8.1/30"
+
+      # ── DMZ ゾーン ───────────────────────────────────────────────
+      - device-id: "dmz-sw-01"
+        device-name: "DMZ Switch"
+        device-type: switch
+        zone: dmz
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Firewall"
+            ip-address: "10.1.7.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Web Server"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To Mail Server"
+          - interface-id: "GigabitEthernet0/4"
+            description: "To DNS Server"
+
+      - device-id: "web-01"
+        device-name: "Web Server"
+        device-type: server
+        zone: dmz
+        interface:
+          - interface-id: "eth0"
+            description: "DMZ LAN"
+            ip-address: "10.10.2.11/24"
+
+      - device-id: "mail-01"
+        device-name: "Mail Server"
+        device-type: server
+        zone: dmz
+        interface:
+          - interface-id: "eth0"
+            description: "DMZ LAN"
+            ip-address: "10.10.2.12/24"
+
+      - device-id: "dns-01"
+        device-name: "DNS Server"
+        device-type: server
+        zone: dmz
+        interface:
+          - interface-id: "eth0"
+            description: "DMZ LAN"
+            ip-address: "10.10.2.13/24"
+
+      # ── サーバゾーン ─────────────────────────────────────────────
+      - device-id: "srv-dist-01"
+        device-name: "Server Distribution SW"
+        device-type: switch
+        zone: server
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Core-SW-01"
+            ip-address: "10.1.4.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Core-SW-02 (redundant)"
+            ip-address: "10.1.5.2/30"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To App Server"
+          - interface-id: "GigabitEthernet0/4"
+            description: "To DB Primary"
+          - interface-id: "GigabitEthernet0/5"
+            description: "To DB Standby"
+          - interface-id: "GigabitEthernet0/6"
+            description: "To File Server"
+
+      - device-id: "app-01"
+        device-name: "App Server"
+        device-type: server
+        zone: server
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.1.11/24"
+
+      - device-id: "db-01"
+        device-name: "DB Server (Primary)"
+        device-type: server
+        zone: server
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.1.21/24"
+
+      - device-id: "db-02"
+        device-name: "DB Server (Standby)"
+        device-type: server
+        zone: server
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.1.22/24"
+
+      - device-id: "file-01"
+        device-name: "File Server"
+        device-type: server
+        zone: server
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.1.31/24"
+
+      # ── オフィスゾーン ───────────────────────────────────────────
+      - device-id: "office-dist-01"
+        device-name: "Office Distribution SW"
+        device-type: switch
+        zone: office
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Core-SW-01"
+            ip-address: "10.1.6.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Access-SW-01"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To Access-SW-02"
+
+      - device-id: "office-acc-01"
+        device-name: "Access Switch Floor1"
+        device-type: switch
+        zone: office
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Dist"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To PC-01"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To PC-02"
+
+      - device-id: "office-acc-02"
+        device-name: "Access Switch Floor2"
+        device-type: switch
+        zone: office
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Dist"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To PC-03"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To PC-04"
+
+      - device-id: "pc-01"
+        device-name: "Client PC 01"
+        device-type: host
+        zone: office
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.3.11/24"
+
+      - device-id: "pc-02"
+        device-name: "Client PC 02"
+        device-type: host
+        zone: office
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.3.12/24"
+
+      - device-id: "pc-03"
+        device-name: "Client PC 03"
+        device-type: host
+        zone: office
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.3.13/24"
+
+      - device-id: "pc-04"
+        device-name: "Client PC 04"
+        device-type: host
+        zone: office
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.3.14/24"
+
+      # ── 管理ゾーン ───────────────────────────────────────────────
+      - device-id: "mgmt-sw-01"
+        device-name: "Management Switch"
+        device-type: switch
+        zone: management
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Core-SW-02"
+            ip-address: "10.1.8.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Mgmt Server"
+          - interface-id: "GigabitEthernet0/3"
+            description: "To Monitor Server"
+
+      - device-id: "mgmt-01"
+        device-name: "Management Server"
+        device-type: server
+        zone: management
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.4.11/24"
+
+      - device-id: "monitor-01"
+        device-name: "Monitoring Server"
+        device-type: server
+        zone: management
+        interface:
+          - interface-id: "eth0"
+            ip-address: "10.10.4.12/24"
+
+    physical-connection:
+      - connection-id: "router-01__fw-01"
+        endpoint:
+          - device-id: "router-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/0"
+
+      - connection-id: "fw-01__core-sw-01"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/1"
+
+      - connection-id: "fw-01__core-sw-02"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "core-sw-02"
+            interface-id: "GigabitEthernet1/0/1"
+
+      - connection-id: "fw-01__dmz-sw-01"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "dmz-sw-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "core-sw-01__core-sw-02"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/2"
+          - device-id: "core-sw-02"
+            interface-id: "GigabitEthernet1/0/2"
+
+      - connection-id: "core-sw-01__srv-dist-01"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/3"
+          - device-id: "srv-dist-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "core-sw-02__srv-dist-01"
+        endpoint:
+          - device-id: "core-sw-02"
+            interface-id: "GigabitEthernet1/0/3"
+          - device-id: "srv-dist-01"
+            interface-id: "GigabitEthernet0/2"
+
+      - connection-id: "core-sw-01__office-dist-01"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/4"
+          - device-id: "office-dist-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "core-sw-02__mgmt-sw-01"
+        endpoint:
+          - device-id: "core-sw-02"
+            interface-id: "GigabitEthernet1/0/4"
+          - device-id: "mgmt-sw-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "dmz-sw-01__web-01"
+        endpoint:
+          - device-id: "dmz-sw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "web-01"
+            interface-id: "eth0"
+
+      - connection-id: "dmz-sw-01__mail-01"
+        endpoint:
+          - device-id: "dmz-sw-01"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "mail-01"
+            interface-id: "eth0"
+
+      - connection-id: "dmz-sw-01__dns-01"
+        endpoint:
+          - device-id: "dmz-sw-01"
+            interface-id: "GigabitEthernet0/4"
+          - device-id: "dns-01"
+            interface-id: "eth0"
+
+      - connection-id: "srv-dist-01__app-01"
+        endpoint:
+          - device-id: "srv-dist-01"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "app-01"
+            interface-id: "eth0"
+
+      - connection-id: "srv-dist-01__db-01"
+        endpoint:
+          - device-id: "srv-dist-01"
+            interface-id: "GigabitEthernet0/4"
+          - device-id: "db-01"
+            interface-id: "eth0"
+
+      - connection-id: "srv-dist-01__db-02"
+        endpoint:
+          - device-id: "srv-dist-01"
+            interface-id: "GigabitEthernet0/5"
+          - device-id: "db-02"
+            interface-id: "eth0"
+
+      - connection-id: "srv-dist-01__file-01"
+        endpoint:
+          - device-id: "srv-dist-01"
+            interface-id: "GigabitEthernet0/6"
+          - device-id: "file-01"
+            interface-id: "eth0"
+
+      - connection-id: "office-dist-01__office-acc-01"
+        endpoint:
+          - device-id: "office-dist-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "office-acc-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "office-dist-01__office-acc-02"
+        endpoint:
+          - device-id: "office-dist-01"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "office-acc-02"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "office-acc-01__pc-01"
+        endpoint:
+          - device-id: "office-acc-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "pc-01"
+            interface-id: "eth0"
+
+      - connection-id: "office-acc-01__pc-02"
+        endpoint:
+          - device-id: "office-acc-01"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "pc-02"
+            interface-id: "eth0"
+
+      - connection-id: "office-acc-02__pc-03"
+        endpoint:
+          - device-id: "office-acc-02"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "pc-03"
+            interface-id: "eth0"
+
+      - connection-id: "office-acc-02__pc-04"
+        endpoint:
+          - device-id: "office-acc-02"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "pc-04"
+            interface-id: "eth0"
+
+      - connection-id: "mgmt-sw-01__mgmt-01"
+        endpoint:
+          - device-id: "mgmt-sw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "mgmt-01"
+            interface-id: "eth0"
+
+      - connection-id: "mgmt-sw-01__monitor-01"
+        endpoint:
+          - device-id: "mgmt-sw-01"
+            interface-id: "GigabitEthernet0/3"
+          - device-id: "monitor-01"
+            interface-id: "eth0"
+
+  layer3-layer:
+    ip-subnet:
+      - subnet-id: "wan-link"
+        prefix: "10.1.0.0/30"
+        description: "router-01 to fw-01"
+      - subnet-id: "fw-core1-link"
+        prefix: "10.1.1.0/30"
+        description: "fw-01 to core-sw-01"
+      - subnet-id: "fw-core2-link"
+        prefix: "10.1.2.0/30"
+        description: "fw-01 to core-sw-02"
+      - subnet-id: "inter-core-link"
+        prefix: "10.1.3.0/30"
+        description: "core-sw-01 to core-sw-02"
+      - subnet-id: "core1-server-link"
+        prefix: "10.1.4.0/30"
+        description: "core-sw-01 to srv-dist-01"
+      - subnet-id: "core2-server-link"
+        prefix: "10.1.5.0/30"
+        description: "core-sw-02 to srv-dist-01 (redundant)"
+      - subnet-id: "core1-office-link"
+        prefix: "10.1.6.0/30"
+        description: "core-sw-01 to office-dist-01"
+      - subnet-id: "fw-dmz-link"
+        prefix: "10.1.7.0/30"
+        description: "fw-01 to dmz-sw-01"
+      - subnet-id: "core2-mgmt-link"
+        prefix: "10.1.8.0/30"
+        description: "core-sw-02 to mgmt-sw-01"
+      - subnet-id: "server-farm"
+        prefix: "10.10.1.0/24"
+        description: "Server Farm LAN"
+      - subnet-id: "dmz-segment"
+        prefix: "10.10.2.0/24"
+        description: "DMZ LAN"
+      - subnet-id: "office-lan"
+        prefix: "10.10.3.0/24"
+        description: "Office LAN"
+      - subnet-id: "management-lan"
+        prefix: "10.10.4.0/24"
+        description: "Management LAN"
