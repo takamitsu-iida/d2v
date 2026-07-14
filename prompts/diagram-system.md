@@ -46,8 +46,8 @@ taillabel="Gi0/1", headlabel="Eth1/1"）
 4. ネットワークゾーン（サブグラフ）によるグループ化
 - 機器の役割や所属するセグメントごとに、背景色を変えた「subgraph cluster」でグルーピングしてください。
 - 例: 「WAN/インターネット境界」「コアLAN（背骨）」「DMZ（公開サーバ領域）」「拠点A」など。
-- 各 cluster には `label`、`style="filled"`、`color`、`bgcolor` を必ず設定してください。
-
+- 各 cluster には `label`、`style="filled"`、`color`、`bgcolor` を必ず設定してください。- **cluster の `bgcolor` は非常に淡いパステル色（明度の高い淡色、目安として HTML の `#F0`～`#FF` 帯の明るい色）のみを使用**してください。ノードの文字・ラベルが埋もれないよう、濃い色や彩度の高い背景色（例: `#1A73E8` のような原色系）は禁止です。
+- cluster の枠線色（`color`）とラベル文字色（`fontcolor`）には濃めの色を使い、淡い背景の上で見出しがはっきり読めるようにしてください。
 # 出力フォーマット
 出力は、Markdownのコードブロック（```dot ...
 ```）で囲まれたGraphvizのDOT言語のみとしてください。前後の挨拶や解説テキストは一切不要です。
@@ -68,13 +68,14 @@ digraph G {
     // ファイアウォール（赤系）: fillcolor="#FCE8E6", color="#C5221F"
     // サーバ・ホスト（黄系）: fillcolor="#FFF8E1", color="#E37400"
 
-    // cluster bgcolor 例
-    // WAN/Edge: bgcolor="#F8F9FA", color="#5F6368"
-    // Core:     bgcolor="#E8F5E9", color="#137333"
-    // DMZ:      bgcolor="#FBE9E7", color="#C5221F"
-    // Server:   bgcolor="#E3F2FD", color="#1A73E8"
-    // Office:   bgcolor="#F3E5F5", color="#7B1FA2"
-    // Mgmt:     bgcolor="#FFFDE7", color="#F57F17"
+    // cluster bgcolor 例（いずれも淡いパステル色。文字が埋もれないよう濃色は使わない）
+    // ラベルは fontcolor に濃色を指定して読みやすくする
+    // WAN/Edge: bgcolor="#F8F9FA", color="#5F6368", fontcolor="#3C4043"
+    // Core:     bgcolor="#E8F5E9", color="#137333", fontcolor="#0B5394"
+    // DMZ:      bgcolor="#FBE9E7", color="#C5221F", fontcolor="#A50E0E"
+    // Server:   bgcolor="#E3F2FD", color="#1A73E8", fontcolor="#174EA6"
+    // Office:   bgcolor="#F3E5F5", color="#7B1FA2", fontcolor="#6A1B9A"
+    // Mgmt:     bgcolor="#FFFDE7", color="#F57F17", fontcolor="#B26A00"
 
     // [ここに解析したサブグラフとノード、エッジの定義を記述]
 }
