@@ -92,6 +92,7 @@ def run(
     max_iterations: int = 3,
     threshold: int = 8,
     patience: int = 1,
+    zone_opacity: float = 0.4,
 ) -> PipelineResult:
     """生成 → 評価 → 改善ループを実行する。
 
@@ -112,6 +113,8 @@ def run(
         threshold: passed = True とするスコア閾値
         patience: ベストスコアが更新されない状態が何回連続したら早期終了するか
             （改善が頭打ちの場合に無駄なイテレーションを省き高速化する）
+        zone_opacity: ゾーン（cluster）背景色の不透明度 0.0〜1.0。1.0 未満のとき
+            背景色を淡く（透過）してレンダリングする。
 
     Returns:
         PipelineResult（ベストスコアの DOT・画像・評価結果を含む）
@@ -132,7 +135,9 @@ def run(
         # ── レンダリング ─────────────────────────────────────────
         console.print("  [dim][2/3] Graphviz レンダリング中...[/dim]")
         try:
-            img_path = renderer.render(dot_code, iter_dir, stem=stem, fmt=fmt)
+            img_path = renderer.render(
+                dot_code, iter_dir, stem=stem, fmt=fmt, zone_opacity=zone_opacity
+            )
         except renderer.RenderError as e:
             # DOT の構文エラー等でレンダリングに失敗した場合、パイプラインを
             # 停止させず、エラー内容を改善ヒントとして次イテレーションへ渡す。

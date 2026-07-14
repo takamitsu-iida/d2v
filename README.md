@@ -108,6 +108,8 @@ python main.py --input examples/sample_topology_small.yaml
   --split-threshold N         このノード数を超え、かつ zone 情報がある場合に
                               俯瞰図＋ゾーン詳細図へ自動分割（デフォルト: 40）
   --no-split                  自動分割を無効化し、常に 1 枚の図として生成する
+  --zone-opacity 0.0-1.0      ゾーン（cluster）背景色の不透明度。背景が濃いときに
+                              下げると淡くなる（1.0=不透明。デフォルト: 0.4）
 ```
 
 ### 大規模トポロジの自動分割（俯瞰図＋ゾーン詳細）

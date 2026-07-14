@@ -81,6 +81,16 @@ def main() -> None:
         action="store_true",
         help="自動分割を無効化し、常に 1 枚の図として生成する",
     )
+    ap.add_argument(
+        "--zone-opacity",
+        type=float,
+        default=0.4,
+        metavar="0.0-1.0",
+        help=(
+            "ゾーン（cluster）背景色の不透明度。背景が濃いときに下げると淡くなる"
+            "（1.0=不透明、例: 0.4でかなり淡く。デフォルト: 0.4）"
+        ),
+    )
     args = ap.parse_args()
 
     console.print(Panel(
@@ -125,6 +135,7 @@ def _run_single(args: argparse.Namespace, topology_text: str) -> None:
         max_iterations=args.max_iter,
         threshold=args.threshold,
         patience=args.patience,
+        zone_opacity=args.zone_opacity,
     )
 
     # ── 最終サマリー ──────────────────────────────────────────────
@@ -178,6 +189,7 @@ def _run_split(args: argparse.Namespace, diagrams: list) -> None:
             max_iterations=args.max_iter,
             threshold=args.threshold,
             patience=args.patience,
+            zone_opacity=args.zone_opacity,
         )
         # ベスト画像を出力ルートへ集約
         final_path = args.output_dir / f"{sub_stem}.{args.format}"
