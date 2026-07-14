@@ -9,7 +9,9 @@ class OpenAIClient(LLMClient):
     """OpenAI API を使用する LLM クライアント。"""
 
     def __init__(self, api_key: str, model: str, max_tokens: int = 8192) -> None:
-        self._client = OpenAI(api_key=api_key)
+        # max_retries を引き上げ、レート制限（429）時に SDK が Retry-After を尊重した
+        # 指数バックオフで自動リトライするようにする。
+        self._client = OpenAI(api_key=api_key, max_retries=6)
         self._model = model
         self._max_tokens = max_tokens
 

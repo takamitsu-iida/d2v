@@ -16,6 +16,8 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 _DOT_BLOCK_RE = re.compile(r"```dot\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 # フォールバック: digraph で始まるコードブロック
 _DIGRAPH_RE = re.compile(r"```[^\n]*\n\s*(digraph\s.*?)```", re.DOTALL)
+# 汎用コードフェンス（```lang\n ... ```）
+_GENERIC_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 
 
 def _load_prompt(filename: str) -> str:
@@ -27,13 +29,24 @@ def _load_prompt(filename: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _strip_code_fences(text: str) -> str:
+    """先頭・末尾に残ったコードフェンス行（``` で始まる行）を除去する。"""
+    lines = text.splitlines()
+    while lines and lines[0].lstrip().startswith("```"):
+        lines.pop(0)
+    while lines and lines[-1].lstrip().startswith("```"):
+        lines.pop()
+    return "\n".join(lines).strip()
+
+
 def _extract_dot(text: str) -> str:
     """LLM 応答テキストから DOT コードを抽出する。
 
     優先順位:
       1. ```dot ... ``` ブロック
       2. ``` で囲まれた digraph から始まるブロック
-      3. テキスト全体（フォールバック）
+      3. 任意の言語指定を持つ汎用コードフェンスブロック
+      4. テキスト全体（フォールバック。残存するフェンス行は除去する）
     """
     m = _DOT_BLOCK_RE.search(text)
     if m:
@@ -41,7 +54,10 @@ def _extract_dot(text: str) -> str:
     m = _DIGRAPH_RE.search(text)
     if m:
         return m.group(1).strip()
-    return text.strip()
+    m = _GENERIC_BLOCK_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    return _strip_code_fences(text)
 
 
 # 入力テキストからノード数・エッジ数を読み取る正規表現

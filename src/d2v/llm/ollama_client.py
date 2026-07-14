@@ -15,6 +15,7 @@ class OllamaClient(LLMClient):
         self._client = OpenAI(
             api_key="ollama",  # Ollama は認証不要だが api_key は必須引数
             base_url=f"{base_url.rstrip('/')}/v1",
+            max_retries=6,
         )
         self._model = model
         self._max_tokens = max_tokens
