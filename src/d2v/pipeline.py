@@ -126,7 +126,24 @@ def run(
 
         # ── レンダリング ─────────────────────────────────────────
         console.print("  [dim][2/3] Graphviz レンダリング中...[/dim]")
-        img_path = renderer.render(dot_code, iter_dir, stem=stem, fmt=fmt)
+        try:
+            img_path = renderer.render(dot_code, iter_dir, stem=stem, fmt=fmt)
+        except renderer.RenderError as e:
+            # DOT の構文エラー等でレンダリングに失敗した場合、パイプラインを
+            # 停止させず、エラー内容を改善ヒントとして次イテレーションへ渡す。
+            console.print(
+                f"  [red]✗ レンダリング失敗:[/red] {e}\n"
+                f"  [dim]  DOT ファイル: {e.dot_path}[/dim]"
+            )
+            console.print(
+                "  [yellow]  → エラーを改善点として次イテレーションで修正を試みます。[/yellow]"
+            )
+            improvement_hints = [
+                "生成した DOT コードが Graphviz の構文エラーでレンダリングに失敗しました。"
+                "有効な DOT 構文になるよう修正してください。"
+                f"Graphviz のエラー: {e}"
+            ]
+            continue
 
         # ── 評価 ─────────────────────────────────────────────────
         console.print("  [dim][3/3] LLM 評価中...[/dim]")
@@ -179,7 +196,15 @@ def run(
         improvement_hints = result.issues
 
     # ── ベスト成果物をルートにコピー ─────────────────────────────
-    assert best_record is not None  # max_iterations >= 1 なので必ず設定される
+    if best_record is None:
+        # 全イテレーションがレンダリングに失敗した場合
+        console.print(
+            "\n[bold red]✗ 全イテレーションでレンダリングに失敗しました。"
+            "有効な図を生成できませんでした。[/bold red]\n"
+            "  [dim]各 iter ディレクトリの .dot ファイルを確認してください。[/dim]"
+        )
+        sys.exit(1)
+
     best_final_image = output_dir / f"{stem}_best.{fmt}"
     shutil.copy2(best_record.image_path, best_final_image)
 

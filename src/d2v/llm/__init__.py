@@ -75,6 +75,7 @@ def get_llm() -> LLMClient:
             return OpenAIClient(
                 api_key=settings.openai_api_key.get_secret_value(),
                 model=settings.openai_model,
+                max_tokens=settings.llm_max_tokens,
             )
         except Exception:
             _abort_missing_credentials("openai")
@@ -86,6 +87,7 @@ def get_llm() -> LLMClient:
             return AnthropicClient(
                 api_key=settings.anthropic_api_key.get_secret_value(),
                 model=settings.anthropic_model,
+                max_tokens=settings.llm_max_tokens,
             )
         except Exception:
             _abort_missing_credentials("anthropic")
@@ -95,6 +97,7 @@ def get_llm() -> LLMClient:
             return OllamaClient(
                 base_url=settings.ollama_base_url,
                 model=settings.ollama_model,
+                max_tokens=settings.llm_max_tokens,
             )
         except Exception:
             _abort_missing_credentials("ollama")

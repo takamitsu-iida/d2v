@@ -8,6 +8,18 @@ from pathlib import Path
 import graphviz
 
 
+class RenderError(Exception):
+    """DOT コードのレンダリングに失敗したことを示す回復可能な例外。
+
+    DOT の構文エラーなど、LLM の再生成で修正しうる失敗を表す。
+    保存済みの .dot ファイルパスと Graphviz からのエラーメッセージを保持する。
+    """
+
+    def __init__(self, message: str, dot_path: Path):
+        super().__init__(message)
+        self.dot_path = dot_path
+
+
 def render(
     dot_code: str,
     output_dir: Path,
@@ -39,6 +51,7 @@ def render(
             cleanup=True,  # 中間 .gv ファイルを削除
         )
     except graphviz.ExecutableNotFound:
+        # Graphviz 未インストールは環境起因の回復不能エラー → 即終了
         print(
             "\n[エラー] Graphviz がインストールされていません。\n"
             "  sudo apt install graphviz\n",
@@ -46,11 +59,7 @@ def render(
         )
         sys.exit(1)
     except Exception as e:
-        print(
-            f"\n[レンダリングエラー] DOT コードの処理に失敗しました:\n{e}\n"
-            f"DOT ファイルを確認してください: {dot_path}\n",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        # DOT の構文エラー等は改善ループで回復しうるため例外を送出する
+        raise RenderError(str(e), dot_path) from e
 
     return Path(rendered)
