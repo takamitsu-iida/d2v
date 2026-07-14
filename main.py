@@ -57,6 +57,16 @@ def main() -> None:
         help="合格スコア閾値 1〜10（デフォルト: 8）",
     )
     ap.add_argument(
+        "--patience",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "ベストスコアが N 回連続で更新されない場合に改善ループを早期終了する"
+            "（改善が頭打ちのときの無駄なイテレーションを省き高速化。デフォルト: 1）"
+        ),
+    )
+    ap.add_argument(
         "--split-threshold",
         type=int,
         default=partitioner.DEFAULT_SPLIT_THRESHOLD,
@@ -114,6 +124,7 @@ def _run_single(args: argparse.Namespace, topology_text: str) -> None:
         fmt=args.format,
         max_iterations=args.max_iter,
         threshold=args.threshold,
+        patience=args.patience,
     )
 
     # ── 最終サマリー ──────────────────────────────────────────────
@@ -166,6 +177,7 @@ def _run_split(args: argparse.Namespace, diagrams: list) -> None:
             fmt=args.format,
             max_iterations=args.max_iter,
             threshold=args.threshold,
+            patience=args.patience,
         )
         # ベスト画像を出力ルートへ集約
         final_path = args.output_dir / f"{sub_stem}.{args.format}"

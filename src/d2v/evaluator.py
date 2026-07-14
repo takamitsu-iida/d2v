@@ -49,9 +49,11 @@ _EDGE_COUNT_RE = re.compile(r"物理接続一覧（(\d+)\s*本）")
 # DOT ノード定義: 行頭 or セミコロン/開き括弧の直後に識別子 + [ が続く
 # → インライン cluster 記述にも対応（"{ label=...; nodeId [...];" など）
 # エッジ属性（-> nodeId [...]）との区別: -> の直後は除外
+# ハイフンを含むノード名（例: "inet-rtr-01"）はダブルクォートで囲まれるため、
+# 識別子前後の任意のクォートも許容して数える（クォート付き定義の数え漏れ防止）。
 _DOT_NODE_DEF_RE = re.compile(
-    r"(?:^|[;{])\s*(?!subgraph\b|digraph\b|graph\b|edge\b|node\b)"
-    r"([A-Za-z_][A-Za-z0-9_-]*)\s*\[",
+    r'(?:^|[;{])\s*(?!subgraph\b|digraph\b|graph\b|edge\b|node\b)'
+    r'"?([A-Za-z_][A-Za-z0-9_-]*)"?\s*\[',
     re.MULTILINE,
 )
 _DOT_EDGE_RE = re.compile(r"->")

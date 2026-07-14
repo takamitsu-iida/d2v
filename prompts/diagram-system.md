@@ -28,6 +28,12 @@
 - **必ず `compound=true` をグラフ属性に設定**してください。cluster を跨いでエッジを引く際に `lhead`/`ltail` で cluster レベルに終端できます。
 - 同一階層のノードは `{rank=same; ...}` で横並びにし、縦方向の流れを整えてください。
 - `newrank=true` を設定すると cluster を跨いだ rank 揃えが有効になります。
+- **ノードやリンクが密集して読みにくくならないよう、必ず十分な余白を確保**してください。グラフ属性に `nodesep`（同一ランク内のノード間隔）と `ranksep`（ランク間の間隔）を明示し、目安として `nodesep=0.6`、`ranksep=1.0` 以上を設定してください。ノード・エッジ数が多い密なゾーンほど、これらの値を大きめ（例: `ranksep=1.4`）にして間隔を広げてください。
+
+1-b. 密なファブリック（spine-leaf など多対多メッシュ）の描き方
+- spine 群・leaf 群のように多数のノードが相互に多対多で接続するゾーンでは、**同種のノードを `{rank=same; ...}` で 1 行に揃え**、spine 行と leaf 行を上下に分離して、リンクが縦方向に整然と流れるようにしてください。
+- 多数の平行リンクが重なって潰れないよう、`nodesep`/`ranksep` を大きめにとり、必要に応じて `splines=true`（曲線）で線を分離してください。
+- 密なメッシュではエッジ中央の `label`（IP セグメント）がラベル同士で重なりやすいため、`taillabel`/`headlabel`（ポート名）を優先し、中央 `label` は `decorate=true` や `labeldistance` の調整で潰れを避けてください。それでも過密で判読不能になる場合に限り、p2p リンク（/30 等）の中央 IP ラベルは省略してポート名を優先しても構いません（ノード・エッジ自体は必ず全て描くこと）。
 
 2. ネットワークSE向けのアイコン・表現ルール
 ノードの名称（label）には、役割が直感的に伝わるよう必ず以下の絵文字とテキストを含めてください。
@@ -57,6 +63,9 @@ digraph G {
     // グラフの基本設定
     compound=true;       // cluster を跨いだ edge を有効にする（必須）
     newrank=true;        // cluster を跨いだ rank 揃えを有効にする
+    nodesep=0.6;         // 同一ランク内のノード間隔（密集回避のため広めに）
+    ranksep=1.0;         // ランク間の間隔（密なゾーンでは 1.4 以上に）
+    splines=true;        // エッジを曲線で分離し重なりを緩和
     fontname="Helvetica,Arial,sans-serif";
     node [fontname="Helvetica,Arial,sans-serif", fontsize=10, shape=box, style="filled,rounded", fixedsize=false, width=1.5];
     edge [fontname="Helvetica,Arial,sans-serif", fontsize=8, color="#4A5568", penwidth=1.5];

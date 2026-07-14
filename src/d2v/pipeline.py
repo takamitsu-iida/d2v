@@ -91,6 +91,7 @@ def run(
     fmt: str = "png",
     max_iterations: int = 3,
     threshold: int = 8,
+    patience: int = 1,
 ) -> PipelineResult:
     """生成 → 評価 → 改善ループを実行する。
 
@@ -99,7 +100,8 @@ def run(
       2. Graphviz でレンダリング → ``output/iter_NN/`` に保存
       3. 評価 → EvaluationResult を取得
       4. ベストスコアを更新（スコアが下がった場合は直前を保持）
-      5. passed == True または最大イテレーション到達でループ終了
+      5. passed == True、ベスト非更新が patience 回連続、または最大イテレーション
+         到達でループ終了
 
     Args:
         topology_text: parser.parse() が返した構造化トポロジテキスト
@@ -108,6 +110,8 @@ def run(
         fmt: 画像フォーマット ("png" or "svg")
         max_iterations: 最大イテレーション数
         threshold: passed = True とするスコア閾値
+        patience: ベストスコアが更新されない状態が何回連続したら早期終了するか
+            （改善が頭打ちの場合に無駄なイテレーションを省き高速化する）
 
     Returns:
         PipelineResult（ベストスコアの DOT・画像・評価結果を含む）
@@ -115,6 +119,7 @@ def run(
     best_record: IterationRecord | None = None
     records: list[IterationRecord] = []
     improvement_hints: list[str] | None = None
+    no_improve_streak = 0
 
     for i in range(max_iterations):
         iter_dir = output_dir / f"iter_{i:02d}"
@@ -189,6 +194,15 @@ def run(
             console.print(
                 f"\n  [bold green]✓ スコア {result.score} が閾値 {threshold} に達しました。"
                 f"ループ終了。[/bold green]"
+            )
+            break
+
+        # ── 早期終了判定（改善が頭打ちなら打ち切って高速化）───────
+        no_improve_streak = 0 if is_best else no_improve_streak + 1
+        if no_improve_streak >= patience and i + 1 < max_iterations:
+            console.print(
+                f"\n  [yellow]→ スコアが {no_improve_streak} 回連続で改善しなかったため"
+                f"早期終了します（ベスト: {best_record.result.score}/10）。[/yellow]"
             )
             break
 
