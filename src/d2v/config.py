@@ -51,5 +51,9 @@ class Settings(BaseSettings):
     # この比に近づける。3:4（縦3・横4）なら 4/3≈1.333。0 以下で無効化。
     diagram_aspect_ratio: float = 4 / 3
 
+    # v2d（画像→トポロジ）: vision LLM へ渡す画像の最大辺ピクセル。
+    # これを超える画像は縦横比を保って縮小する（トークン量と精度のバランス）。
+    v2d_max_image_dim: int = 2048
+
 
 settings = Settings()

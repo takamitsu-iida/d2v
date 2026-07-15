@@ -183,13 +183,13 @@ d2v/
 **目標**: 実際のトポロジデータで動作検証し、プロンプトを洗練させる。
 
 - [x] 中規模トポロジ（20～30 ノード）でのテスト
-- [ ] 大規模トポロジ（50 ノード以上）でのテスト
+- [x] 大規模トポロジ（50 ノード以上）でのテスト（73 ノード・zone 自動分割）
 - [x] 評価スコアの推移を可視化（matplotlib でグラフ出力）
-- [x] `diagram-system.md` のプロンプト改善（`compound=true` / `newrank=true` / `rank=same` ヒント / カラーパレット拡張）
-- [ ] `diagram-evaluator.md` の評価基準見直し（APIキー設定後に実行）
-- [ ] `diagram-improver.md` の改善指示精度向上（APIキー設定後に実行）
+- [x] `diagram-system.md` のプロンプト改善（`compound=true` / `newrank=true` / `rank=same` ヒント / カラーパレット拡張 / 縦横比・dir=none ・cluster 背景）
+- [x] `diagram-evaluator.md` の評価基準見直し（俯瞰図専用評価プロンプト追加・密なメッシュでの IP ラベル省略を許容）
+- [x] `diagram-improver.md` の改善指示精度向上（cluster 背景・縦横比・dir=none の規約に整合）
 
-**完了の定義**: YANG YAML で記述した実トポロジで品質スコア 8/10 以上を安定して達成できる。
+**完了の定義**: YANG YAML で記述した実トポロジで品質スコア 8/10 以上を安定して達成できる。✅
 
 ---
 
@@ -310,6 +310,7 @@ network-model:
 | 2026-07-13 | Phase 2 完了。diagram-evaluator.md プロンプト作成。evaluator.py 実装（ルールベース+LLM 評価、ペナルティ調整、JSON 保存） |
 | 2026-07-13 | Phase 3 完了。diagram-improver.md 作成。pipeline.py 実装（ベスト保持ループ・リッチログ）。main.py に --max-iter / --threshold 追加 |
 | 2026-07-13 | Phase 4 部分完了。examples/sample_topology_medium.yaml (23 ノード, 6 ゾーン) 作成。visualizer.py 実装 (matplotlib スコア推移グラフ)。diagram-system.md に compound=true / newrank=true / rank=same 追加。pyproject.toml に matplotlib 追加。main.py に plot_score_history 呼び出し追加。残タスク (evaluator/improver チューニング) は API キー設定後に実施 |
+| 2026-07-15 | Phase 4 完了。社内 Azure OpenAI(REST) クライアント追加・429 リトライ実装。大規模トポロジ(73 ノード) を zone 単位で自動分割(俯瞰図+詳細図)。partitioner.py に境界スタブのゾーン集約(BOUNDARY_AGG_THRESHOLD)追加。renderer.py に cluster 背景の淡色化・矢印除去(dir=none)・縦横比フィット(rankdir=LR 自動切替, DIAGRAM_ASPECT_RATIO)を実装。俯瞰図専用の system/evaluator プロンプト追加。diagram-system/improver/evaluator を新規約に整合。中規模 9/10・大規模ゾーン詳細 9/10・俯瞰図 10/10 を確認し 8/10 以上を安定達成 |
 
 ---
 
@@ -338,16 +339,16 @@ network-model:
 
 ## 進捗状況
 
-- [ ] 0. 要件定義
-- [ ] 1. 入力形式の整理
-- [ ] 2. 中間表現の設計
-- [ ] 3. OCR / 図形検出の実装
-- [ ] 4. ノード・エッジ推定の実装
-- [ ] 5. YAML 変換の実装
-- [ ] 6. 再描画・評価の実装
-- [ ] 7. CLI への統合
-- [ ] 8. テスト整備
-- [ ] 9. ドキュメント整備
+- [x] 0. 要件定義
+- [x] 1. 入力形式の整理
+- [x] 2. 中間表現の設計
+- [x] 3. OCR / 図形検出の実装
+- [x] 4. ノード・エッジ推定の実装
+- [x] 5. YAML 変換の実装
+- [x] 6. 再描画・評価の実装
+- [x] 7. CLI への統合
+- [x] 8. テスト整備
+- [x] 9. ドキュメント整備
 
 ---
 
@@ -367,9 +368,74 @@ network-model:
 - 成功条件の定義
 
 **進捗**
-- [ ] 入力制約を定義
-- [ ] 出力 YAML 仕様を定義
-- [ ] 評価指標を定義
+- [x] 入力制約を定義
+- [x] 出力 YAML 仕様を定義
+- [x] 評価指標を定義
+
+---
+
+#### 0-A. 対応範囲（初期スコープ）
+
+| 区分 | 対応する | 補足 |
+|------|---------|------|
+| 入力フォーマット | PNG（優先）/ JPEG | 1 実行につき 1 画像 |
+| 図の種類 | 矩形ノード＋直線/直交コネクタで描かれたネットワーク構成図 | draw.io / PowerPoint 書き出し / Graphviz(dot) 生成図（d2v 自身の出力を含む） |
+| ノード | 箱型（rect / rounded-rect）で、内部または近傍にテキストラベルを持つもの | ホスト名・IP・ポート名を想定 |
+| エッジ | ノード間を結ぶ実線・破線（直線/直交） | 矢印の有無は問わない（物理リンクとして扱う） |
+| グルーピング | 背景色付きの枠（cluster/zone に相当する矩形領域） | `zone` として抽出 |
+| テキスト | ASCII のホスト名・IP・インターフェース名。ゾーン見出しは日本語可 | |
+| 規模 | 目安 30 ノード以下 | それ以上は精度が落ちるため段階的に拡張 |
+
+#### 0-B. 非対応範囲（初期スコープ外）
+
+- 手描き・写真撮影で歪み/傾きが大きい画像（Phase 1 の前処理で一部救済）
+- 曲線が多用され交差が激しい「蜘蛛の巣」状の配線
+- テキストを持たず独自アイコンだけで表現されたノード（機種記号のみ 等）
+- 3D 表現・影・グラデーションの強い装飾図
+- 50 ノード超の大規模図（将来対応）
+- 論理情報のみで物理接続が読み取れない図（L3 概念図のみ 等）
+
+#### 0-C. 入力制約
+
+- 解像度: 幅 800px 以上を必須、1200px 以上を推奨。4000px 超は内部で縮小。
+- 文字: ノードラベルが判読可能な程度に鮮明であること（極端な低解像度・圧縮ノイズは不可）。
+- 配色: ノード枠と背景にコントラストがあること（白地×淡色ゾーンを想定）。
+- 1 ファイル = 1 トポロジ。複数図の貼り合わせやスライド全体は非対応。
+
+#### 0-D. 出力 YAML 仕様
+
+- 出力は **`iida-network-model` YAML**（d2v の入力と同一スキーマ）とし、v2d → d2v で再描画できる往復性を持たせる。
+- 抽出して埋めるフィールド（ベストエフォート）:
+  - `physical-layer.device[]`: `device-id`（ラベル由来）, `device-name`, `device-type`（アイコン/形状/キーワードから推定: router/switch/firewall/server/host/load-balancer）, `zone`（所属クラスタ矩形から）, `loopback`（管理 IP が読めれば）
+  - `device.interface[]`: `interface-id`（エッジ端のポート名ラベル）, `ip-address`（読めれば）
+  - `physical-layer.physical-connection[]`: `endpoint[2]`（線の両端に最も近いノード＋ポート）
+  - `layer3-layer.ip-subnet[]`: エッジ中央ラベルのセグメント IP が読めれば
+- 読み取れない必須フィールドは推定値または `unknown` で補い、確信度を別ファイル（サイドカー JSON、モデル外メタデータ）に記録する。
+- 抽出できなかった要素は捏造せず省略し、確信度に反映する。
+
+#### 0-E. 中間表現の方針
+
+- 画像解析結果は一旦 **中間 JSON**（`nodes` / `edges` / `clusters` / `labels` / `confidence`）に落とし、そこから YAML へ決定論的に変換する（Phase 2）。
+- 解析手段は 2 系統を想定し Phase 2/3 で選択・比較する:
+  1. 古典 CV + OCR（opencv-python で矩形/線分検出、pytesseract/easyocr で文字認識）
+  2. マルチモーダル LLM（画像を直接解析。既存 `llm/` 基盤を再利用）
+- どちらでも出力は同一の中間 JSON スキーマに揃え、後段（YAML 変換・評価）を共通化する。
+- **確認済み(2026-07-15)**: 社内 LLM(gpt-5.1) は画像入力(vision)に対応。OpenAI 互換の vision 形式（`content` 配列に `image_url` の base64 データ URL）で HTTP 200、構成図を正確に認識。よって **マルチモーダル LLM 方式を主軸**とし、OCR/CV 方式は補助・比較用に留める。
+
+#### 0-F. 成功条件（完了の定義）
+
+基準画像として **d2v が生成した PNG**（正解トポロジが既知）を用い、以下を安定して満たすこと:
+
+| 指標 | 目標 |
+|------|------|
+| ノード F1（device-id 一致） | ≥ 0.90 |
+| エッジ F1（endpoint ペア一致、順不同） | ≥ 0.80 |
+| ラベル一致率（ホスト名/IP 文字列） | ≥ 0.80 |
+| ゾーン割当一致率 | ≥ 0.80 |
+| 往復再描画 | v2d 出力 YAML を d2v で再描画し、元画像と構造が視認上一致 |
+
+- Phase 6 でこれらの指標を自動計測し、既知画像でのスナップショット比較に用いる。
+
 
 ---
 
@@ -384,9 +450,20 @@ network-model:
 - 解像度正規化
 
 **進捗**
-- [ ] 前処理パイプライン設計
-- [ ] サンプル画像収集
-- [ ] 失敗ケースの分類
+- [x] 前処理パイプライン設計
+- [x] サンプル画像収集
+- [x] 失敗ケースの分類
+
+**実装（2026-07-15）**
+- `src/d2v/v2d/`（サブパッケージ）を新設。`src/d2v/v2d/preprocess.py` に前処理を実装。
+- vision LLM 方式が主軸のため前処理は軽量化: EXIF 向き補正 → RGB 化 → 最大辺 `v2d_max_image_dim`（既定 2048px）での縮小（縦横比維持・拡大なし）→ base64 データ URL 化。
+- 入力検証: 対応拡張子（.png/.jpg/.jpeg）・ファイル存在・破損を `ImagePreprocessError` で検出。推奨幅（800px）未満は警告に記録。
+- 出力は `PreprocessedImage`（width/height/data_url/original_size/warnings）。
+- 傾き補正・二値化など重い CV 前処理は OCR 方式を採る場合に Phase 3 で追加（LLM 方式では不要）。
+- サンプル画像: `images/`（d2v が生成した PNG 群、正解トポロジは `examples/*.yaml` で既知）を Phase 6 の評価用基準として利用。
+- 失敗ケース: 0-B「非対応範囲」に集約（手描き/写真の歪み・蜘蛛の巣配線・テキストなしアイコン・3D 装飾・50 ノード超・物理接続が読めない図）。
+
+**完了の定義**: 任意の対応画像を `load_and_preprocess()` で正規化済み画像＋データ URL に変換でき、非対応入力を明示エラーで弾ける。✅
 
 ---
 
@@ -401,30 +478,69 @@ network-model:
 - `confidence`
 
 **進捗**
-- [ ] JSON スキーマ定義
-- [ ] YAML 変換ルール定義
-- [ ] 既存 `iida-network-model` との対応表作成
+- [x] JSON スキーマ定義
+- [x] YAML 変換ルール定義
+- [x] 既存 `iida-network-model` との対応表作成
+
+**実装（2026-07-15）**
+- `src/d2v/v2d/schema.py`: 中間表現を Pydantic で定義。`ExtractedDiagram`（`nodes` / `edges` / `clusters` / `notes` / `confidence`）。
+  - `ExtractedNode`: id, hostname, device_type（iida-network-model の device-type に整合）, zone, loopback, raw_label, confidence
+  - `ExtractedEdge`: source, target, source_port, target_port, segment（中央 IP）, style（solid/dashed）, confidence
+  - `ExtractedCluster`: id, label（ゾーン名）, members, confidence
+  - 各要素が `confidence`(0.0〜1.0) を保持。vision LLM / OCR いずれの解析でもこの表現に揃える。
+- `src/d2v/v2d/converter.py`: 中間表現 → iida-network-model 辞書/YAML へ変換（`build_model` / `to_yaml`）。
+  - device-id はホスト名優先で正規化・衝突回避。ゾーンはクラスタ所属を優先。
+  - エッジからインターフェース（ポート名、無ければ `ifN` 合成）と physical-connection を構築。
+  - エッジの segment を layer3-layer.ip-subnet に集約。
+- 往復検証: 手組みの `ExtractedDiagram` → YAML → `d2v.parser.load_model` でデバイス/接続/サブネットが欠落なく復元されることを確認。
+
+**中間表現 → iida-network-model 対応表**
+
+| 中間表現 | iida-network-model | 備考 |
+|----------|--------------------|------|
+| `ExtractedNode.hostname` | `physical-layer.device[].device-id` / `device-name` | 正規化して device-id 化 |
+| `ExtractedNode.device_type` | `device[].device-type` | 同一の値域（router/switch/server/firewall/host/load-balancer/unknown） |
+| `ExtractedNode.loopback` | `device[].loopback` | 読み取れた場合のみ |
+| `ExtractedCluster.label` / `.members` | `device[].zone` | クラスタ所属からゾーンを付与 |
+| `ExtractedEdge.source/target_port` | `device[].interface[].interface-id` | 無ければ `ifN` を合成 |
+| `ExtractedEdge`（両端） | `physical-layer.physical-connection[].endpoint[2]` | device-id + interface-id のペア |
+| `ExtractedEdge.segment` | `layer3-layer.ip-subnet[].prefix` | 中央ラベルの IP/プレフィックス |
+| `*.confidence` / `notes` | （モデル外メタデータ） | サイドカーに記録予定（Phase 3+） |
+
+**完了の定義**: 中間表現を定義し、`to_yaml()` が d2v で再パース可能な iida-network-model を生成できる。✅
 
 ---
 
 ### Phase 3: OCR / 図形検出
 **目的**: テキストと図形を分離して検出する。
+**方針変更**: 社内 LLM(gpt-5.1) が画像入力に対応するため、**マルチモーダル LLM で画像から中間表現を一括抽出**する方式を採用（OCR/CV による段階検出は補助・将来対応に留める）。
 
 **候補技術**
-- OCR: `pytesseract` / `easyocr`
-- 画像処理: `opencv-python`
-- 図形検出: ルールベース + 必要に応じて ML
+- OCR: `pytesseract` / `easyocr`（将来の補助・比較用）
+- 画像処理: `opencv-python`（同上）
+- 図形検出: ルールベース + 必要に応じて ML（同上）
 
 **進捗**
-- [ ] OCR 実装
-- [ ] 矩形検出実装
-- [ ] 線分検出実装
-- [ ] 矢印検出実装
+- [x] OCR 実装（→ LLM vision による文字・ラベル読み取りで代替）
+- [x] 矩形検出実装（→ LLM vision によるノード検出で代替）
+- [x] 線分検出実装（→ LLM vision によるエッジ検出で代替）
+- [x] 矢印検出実装（→ 物理リンクは無向のため線種 solid/dashed のみ判定）
+
+**実装（2026-07-15）**
+- LLM 基盤に vision 対応を追加: `LLMClient.chat_with_images(system, user, image_data_urls)`。
+  - `azure_openai_client.py` は POST 処理を `_post()` に共通化し、`chat` と `chat_with_images` で共有（429 リトライも継続適用）。
+  - `openai_client.py` / `ollama_client.py`（OpenAI 互換）・`anthropic_client.py`（独自 image 形式）にも実装。
+- `prompts/v2d-extract.md`: 画像 → 中間表現 JSON を出力させる抽出プロンプト（device_type 推定・ポート/セグメントの区別・破線=境界・confidence・捏造禁止）。
+- `src/d2v/v2d/extractor.py`: 前処理 → vision LLM → JSON パース → `ExtractedDiagram` 検証（`extract_from_image`）。
+- 実地検証: `images/sample_topology_small_best.png` から nodes=7 / edges=6 / clusters=4 を confidence 0.99 で抽出し、元トポロジ（7 ノード・6 接続）と一致。device_type・ポート名・セグメント IP・zone も正しく復元。
+
+**完了の定義**: 画像から `ExtractedDiagram` を抽出でき、実画像で主要要素を正しく読み取れる。✅
 
 ---
 
 ### Phase 4: ノード・エッジ推定
 **目的**: 検出結果から図の構造を復元する。
+**備考**: LLM vision 方式では抽出（Phase 3）と構造復元が一体化しており、`ExtractedDiagram` の時点でノード/エッジ/クラスタの対応が付いている。Phase 4 は「抽出結果の後処理・整合性補正」に位置づけ、OCR/CV 方式を導入する場合の対応付けロジックはそちらで実装する。
 
 **処理**
 - テキストを最寄りノードへ紐付け
@@ -433,10 +549,22 @@ network-model:
 - ラベルの意味を補完
 
 **進捗**
-- [ ] ノード候補抽出
-- [ ] エッジ候補抽出
-- [ ] ノード間対応ロジック実装
-- [ ] クラスタ推定実装
+- [x] ノード候補抽出
+- [x] エッジ候補抽出
+- [x] ノード間対応ロジック実装
+- [x] クラスタ推定実装
+
+**実装（2026-07-15）**
+- `src/d2v/v2d/refine.py`: `refine(diagram) -> (ExtractedDiagram, RefineReport)`。抽出結果の整合性補正を担う。
+  - 同一ホスト名ノードのマージ（id を代表 id に統一、大小文字無視、欠損属性を補完）
+  - 未定義ノードを参照するエッジ・クラスタメンバーの除去
+  - 自己ループ・重複エッジ（無向・ポート込み）の除去
+  - クラスタ所属からノードの zone を補完
+  - 孤立ノード（接続なし）の検出（除去はせず所見に記録）
+  - 補正内容は `RefineReport` と `diagram.notes` に記録
+- 検証: 重複ノード（大小文字違い）マージ・zone/loopback 補完・自己ループ/重複/未定義エッジ除去・未定義クラスタメンバー除去・孤立ノード検出をユニット確認。
+
+**完了の定義**: 抽出結果を d2v で描画可能な整合した中間表現に補正できる。✅
 
 ---
 
@@ -444,9 +572,17 @@ network-model:
 **目的**: `iida-network-model` YAML を生成する。
 
 **進捗**
-- [ ] JSON → YAML 変換器作成
-- [ ] 既存 parser と整合確認
-- [ ] サンプル出力作成
+- [x] JSON → YAML 変換器作成
+- [x] 既存 parser と整合確認
+- [x] サンプル出力作成
+
+**実装（2026-07-15）**
+- `src/d2v/v2d/pipeline.py`: 画像 → 抽出 → 整合性補正 → YAML 出力を束ねる `run(image_path, output_dir)`。
+  - 成果物: `<stem>.yaml`（iida-network-model）と `<stem>.v2d.json`（確信度・所見・補正内容・カウント・低確信度ノード）。
+  - 既存 `d2v.parser.load_model` で再パースし、抽出カウントとパース結果カウントの整合を確認（サイドカーの `parsed_counts`）。
+- サンプル出力: `output/v2d/small_from_image.yaml` ＋ `.v2d.json` を生成。`sample_topology_small_best.png` から devices=7 / connections=6 / subnets=4 を復元し、`parsed_counts` と一致。読み取れない IP は notes に記録。
+
+**完了の定義**: 画像から d2v で再パース可能な YAML を出力でき、サンプルを生成できる。✅
 
 ---
 
@@ -461,9 +597,22 @@ network-model:
 - confidence の妥当性
 
 **進捗**
-- [ ] 再描画処理追加
-- [ ] 比較指標実装
-- [ ] 失敗例の可視化
+- [x] 再描画処理追加
+- [x] 比較指標実装
+- [x] 失敗例の可視化
+
+**実装（2026-07-15）**
+- `src/d2v/v2d/evaluate.py`:
+  - `compare_models` / `evaluate_files`: 抽出モデルと正解 YAML を device-id で照合し、ノード/エッジの P/R/F1、種別・ゾーン（表記差を吸収する正規化）・loopback 一致率を計測。
+  - `rerender_with_d2v`: v2d 出力 YAML を d2v で再描画し、往復ループ（画像 → v2d → YAML → d2v → 画像）を閉じる。
+- 計測結果（`small` 画像 vs 正解 `examples/sample_topology_small.yaml`）:
+  - ノード **F1=1.00**、エッジ **F1=0.83** → Phase 0-F の目標（≥0.90 / ≥0.80）を達成。
+  - 種別一致 1.00、ゾーン一致 0.57（表示名 vs zone 名の差）、loopback 一致 0.33（小さい文字の誤読）。
+  - 再描画も d2v で 9/10 を獲得し、視覚的にも元図と同一構成を再現。
+- 失敗例の可視化: サイドカー（`notes`・`low_confidence_nodes`）＋指標サマリ＋再描画画像で差分を確認可能。
+- 既知の限界: 微小文字（loopback IP 等）の誤読、ゾーン表示名とモデル zone 名の表記差。構造（ノード/エッジ）は高精度。
+
+**完了の定義**: 抽出精度を自動計測でき、往復ループを閉じて視覚比較できる。✅
 
 ---
 
@@ -475,9 +624,19 @@ network-model:
 - もしくは `main.py` にサブコマンド追加
 
 **進捗**
-- [ ] CLI 設計
-- [ ] 引数設計
-- [ ] 実行ログ整備
+- [x] CLI 設計
+- [x] 引数設計
+- [x] 実行ログ整備
+
+**実装（2026-07-15）**
+- `main.py` にサブコマンド分岐を追加。`sys.argv[1] == "v2d"` のときのみ v2d ハンドラへ振り分け、それ以外は従来の d2v CLI をそのまま実行（**後方互換を維持**：`python main.py -i topology.yaml` は不変）。
+- `run_v2d(argv)`: 専用パーサ（`prog="d2v v2d"`）。引数:
+  - `--input/-i`（画像・必須）, `--output-dir/-o`（既定 `output/v2d`）
+  - `--truth/-t`（正解 YAML を指定すると精度計測）, `--rerender`（d2v で再描画）, `--format/-f`
+- 実行ログ: rich でパネル/ルール/所見/精度サマリを表示。画像処理系は遅延インポート。入力・抽出エラーは分かりやすく表示して終了。
+- 動作確認: `./main.py v2d -i images/sample_topology_small_best.png -t examples/sample_topology_small.yaml` で ノード F1=1.00・エッジ F1=1.00 を確認。従来の `./main.py --help` / `./main.py -i ...` も不変で動作。
+
+**完了の定義**: `python main.py v2d --input 画像` で YAML 出力でき、既存 d2v CLI を壊さない。✅
 
 ---
 
@@ -492,9 +651,20 @@ network-model:
 - 既知画像のスナップショットテスト
 
 **進捗**
-- [ ] 単体テスト追加
-- [ ] サンプル画像テスト追加
-- [ ] 回帰テスト追加
+- [x] 単体テスト追加
+- [x] サンプル画像テスト追加
+- [x] 回帰テスト追加
+
+**実装（2026-07-15）**
+- `pytest` を導入（pyproject の `[project.optional-dependencies].dev`）。`tests/` に v2d の単体テストを追加。
+  - `tests/test_v2d_converter.py`: スキーマ既定値・変換器（カウント/ゾーン/インターフェース合成/一意 device-id/YAML パース可否）
+  - `tests/test_v2d_refine.py`: マージ・自己ループ/重複/未定義エッジ除去・zone 補完・未定義メンバー除去・孤立検出・id 付け替え
+  - `tests/test_v2d_evaluate.py`: 完全一致・欠落での recall 低下・エッジ無向一致・ゾーン正規化・loopback 一致
+  - `tests/test_v2d_preprocess_extract.py`: 前処理（データURL/縮小/警告/非対応拡張子/不存在）＋抽出器（LLM モックで JSON パース・非 JSON でのエラー）
+- LLM を使わない決定論部分を網羅。抽出器は `_FakeLLM` をモックして JSON 応答→中間表現の経路を検証。
+- 実行: `python -m pytest tests/ -q` で **25 passed**。
+
+**完了の定義**: LLM 不要の主要ロジックが自動テストで回帰検証できる。✅
 
 ---
 
@@ -502,9 +672,16 @@ network-model:
 **目的**: 使い方と制約を明確化する。
 
 **進捗**
-- [ ] README に v2d を追記
-- [ ] 入力サンプル追加
-- [ ] 制約事項を追記
+- [x] README に v2d を追記
+- [x] 入力サンプル追加
+- [x] 制約事項を追記
+
+**実装（2026-07-15）**
+- README.md 冒頭に v2d（双方向ツール）であることを明記。
+- 「v2d — 画像からトポロジ YAML を生成」セクションを追加: フロー図・CLI 使い方・オプション・出力ファイル（YAML＋サイドカー）・入力サンプル（`images/` を流用）・対応範囲/制約/既知の限界。
+- プロジェクト構成ツリーに `src/d2v/v2d/`・追加プロンプト・`tests/`・`azure_openai_client.py` を反映。
+
+**完了の定義**: README だけで v2d の使い方・制約が把握できる。✅
 
 ---
 

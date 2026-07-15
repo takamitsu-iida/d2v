@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""d2v: iida-network-model YAML → ネットワーク構成図（PNG / SVG）生成ツール。"""
+"""d2v: iida-network-model YAML → ネットワーク構成図（PNG / SVG）生成ツール。
+
+サブコマンド:
+  （なし）        d2v: YAML → 構成図（従来どおり `python main.py -i topology.yaml`）
+  v2d            vision-to-diagram: 構成図画像 → iida-network-model YAML
+"""
 
 from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from pathlib import Path
 
 from rich.console import Console
@@ -18,6 +24,14 @@ console = Console()
 
 
 def main() -> None:
+    # v2d サブコマンドは専用ハンドラへ振り分ける（従来の d2v CLI は後方互換のまま維持）
+    if len(sys.argv) > 1 and sys.argv[1] == "v2d":
+        run_v2d(sys.argv[2:])
+        return
+    run_d2v()
+
+
+def run_d2v() -> None:
     ap = argparse.ArgumentParser(
         prog="d2v",
         description="iida-network-model YAML からネットワーク構成図を生成します。",
@@ -218,6 +232,120 @@ def _run_split(args: argparse.Namespace, diagrams: list) -> None:
         title="[bold green]✓ 完了[/bold green]",
         expand=False,
     ))
+
+
+# ---------------------------------------------------------------------------
+# v2d サブコマンド（vision-to-diagram: 画像 → YAML）
+# ---------------------------------------------------------------------------
+
+
+def run_v2d(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="d2v v2d",
+        description="ネットワーク構成図の画像から iida-network-model YAML を生成します。",
+    )
+    ap.add_argument(
+        "--input", "-i",
+        required=True,
+        type=Path,
+        metavar="IMAGE",
+        help="入力画像ファイル（PNG / JPEG）",
+    )
+    ap.add_argument(
+        "--output-dir", "-o",
+        type=Path,
+        default=Path("output/v2d"),
+        metavar="DIR",
+        help="出力ディレクトリ（デフォルト: output/v2d）",
+    )
+    ap.add_argument(
+        "--truth", "-t",
+        type=Path,
+        default=None,
+        metavar="YAML",
+        help="正解トポロジ YAML（指定すると抽出精度を計測する）",
+    )
+    ap.add_argument(
+        "--rerender",
+        action="store_true",
+        help="生成した YAML を d2v で再描画し往復ループを閉じる（LLM を使用）",
+    )
+    ap.add_argument(
+        "--format", "-f",
+        choices=["png", "svg"],
+        default="png",
+        help="再描画時の出力フォーマット（デフォルト: png）",
+    )
+    args = ap.parse_args(argv)
+
+    # 遅延インポート（画像処理系の依存を v2d 実行時のみ読み込む）
+    from d2v.v2d import evaluate as v2d_evaluate
+    from d2v.v2d import pipeline as v2d_pipeline
+    from d2v.v2d.extractor import ExtractionError
+    from d2v.v2d.preprocess import ImagePreprocessError
+
+    console.print(Panel(
+        f"入力画像         : [bold cyan]{args.input}[/bold cyan]\n"
+        f"出力ディレクトリ : [bold cyan]{args.output_dir}[/bold cyan]\n"
+        f"精度計測         : "
+        + (f"[bold cyan]{args.truth}[/bold cyan]" if args.truth else "[dim]なし[/dim]")
+        + "\n再描画           : "
+        + ("[bold cyan]あり[/bold cyan]" if args.rerender else "[dim]なし[/dim]"),
+        title="[bold blue]v2d  画像 → トポロジ YAML 変換[/bold blue]",
+        expand=False,
+    ))
+
+    # ── 抽出 → 補正 → YAML 出力 ──────────────────────────────────
+    console.print(Rule("[bold]Step 1  画像解析 → YAML 生成[/bold]"))
+    console.print("  [dim]vision LLM で構造抽出中...[/dim]")
+    try:
+        result = v2d_pipeline.run(args.input, args.output_dir)
+    except ImagePreprocessError as e:
+        console.print(f"\n[bold red]✗ 入力画像エラー:[/bold red] {e}\n")
+        sys.exit(1)
+    except ExtractionError as e:
+        console.print(f"\n[bold red]✗ 抽出エラー:[/bold red] {e}\n")
+        sys.exit(1)
+
+    # ── 抽出サマリー ──────────────────────────────────────────────
+    conf_color = (
+        "green" if result.confidence >= 0.8
+        else "yellow" if result.confidence >= 0.5
+        else "red"
+    )
+    console.print(Panel(
+        f"ノード数         : [bold]{result.node_count}[/bold]\n"
+        f"エッジ数         : [bold]{result.edge_count}[/bold]\n"
+        f"ゾーン数         : [bold]{result.cluster_count}[/bold]\n"
+        f"総合確信度       : [{conf_color}]{result.confidence:.2f}[/{conf_color}]\n"
+        f"YAML             : [bold]{result.yaml_path}[/bold]\n"
+        f"サイドカー       : [bold]{result.sidecar_path}[/bold]",
+        title="[bold green]✓ 抽出完了[/bold green]",
+        expand=False,
+    ))
+    for note in result.diagram.notes[:8]:
+        console.print(f"  [dim]· {note}[/dim]")
+
+    # ── 精度計測（正解 YAML があれば） ───────────────────────────
+    if args.truth:
+        console.print(Rule("[bold]Step 2  抽出精度の計測[/bold]"))
+        metrics = v2d_evaluate.evaluate_files(result.yaml_path, args.truth)
+        console.print(metrics.summary())
+
+    # ── 再描画（d2v 往復） ────────────────────────────────────────
+    if args.rerender:
+        console.print(Rule("[bold]Step 3  d2v で再描画（往復ループ）[/bold]"))
+        rr = v2d_evaluate.rerender_with_d2v(
+            result.yaml_path,
+            args.output_dir / "rerender",
+            fmt=args.format,
+        )
+        console.print(Panel(
+            f"再描画画像       : [bold]{rr.best_image}[/bold]\n"
+            f"再描画スコア     : [bold]{rr.best_result.score}/10[/bold]",
+            title="[bold green]✓ 再描画完了[/bold green]",
+            expand=False,
+        ))
 
 
 if __name__ == "__main__":

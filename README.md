@@ -1,7 +1,9 @@
 # d2v — Diagram to Vision
 
-`iida-network-model` YANG YAML で記述したネットワークトポロジを、LLM (OpenAI / Anthropic / Ollama) を通じて Graphviz の構成図（PNG / SVG）に自動変換するツールです。
+`iida-network-model` YANG YAML で記述したネットワークトポロジを、LLM (OpenAI / Azure OpenAI / Anthropic / Ollama) を通じて Graphviz の構成図（PNG / SVG）に自動変換するツールです。
 生成した図を自動評価し、スコアが閾値に達するまで自律的に改善するループ構造を持ちます。
+
+逆方向の **v2d（vision-to-diagram）** も同梱しており、構成図の**画像**から `iida-network-model` YAML を生成できます（[v2d のセクション](#v2d--画像からトポロジ-yaml-を生成vision-to-diagram)を参照）。
 
 ```
 YAML (iida-network-model)
@@ -299,20 +301,33 @@ d2v/
 │   ├── evaluator.py               ← 品質評価（ルールベース + LLM）
 │   ├── pipeline.py                ← 生成→評価→改善ループ
 │   ├── visualizer.py              ← スコア推移グラフ（matplotlib）
-│   └── llm/                       ← LLM クライアント層
-│       ├── __init__.py            ← get_llm() ファクトリ関数
-│       ├── base.py                ← LLMClient 抽象基底クラス
-│       ├── openai_client.py
-│       ├── anthropic_client.py
-│       └── ollama_client.py
+│   ├── llm/                       ← LLM クライアント層
+│   │   ├── __init__.py            ← get_llm() ファクトリ関数
+│   │   ├── base.py                ← LLMClient 抽象基底クラス（vision 対応）
+│   │   ├── openai_client.py
+│   │   ├── azure_openai_client.py ← Azure OpenAI（api-key ヘッダー方式）
+│   │   ├── anthropic_client.py
+│   │   └── ollama_client.py
+│   └── v2d/                       ← vision-to-diagram（画像 → YAML）
+│       ├── preprocess.py          ← 画像の正規化・データURL化
+│       ├── schema.py              ← 中間表現（ExtractedDiagram）
+│       ├── extractor.py           ← vision LLM で画像 → 中間表現
+│       ├── refine.py              ← 抽出結果の整合性補正
+│       ├── converter.py           ← 中間表現 → iida-network-model YAML
+│       ├── evaluate.py            ← 抽出精度の計測・d2v 再描画
+│       └── pipeline.py            ← 画像 → YAML の一連フロー
 ├── prompts/
 │   ├── diagram-system.md          ← DOT 生成システムプロンプト
+│   ├── diagram-system-overview.md ← 俯瞰図用の生成プロンプト
 │   ├── diagram-evaluator.md       ← 評価プロンプト（10 点満点）
-│   └── diagram-improver.md        ← 改善プロンプト
+│   ├── diagram-evaluator-overview.md ← 俯瞰図用の評価プロンプト
+│   ├── diagram-improver.md        ← 改善プロンプト
+│   └── v2d-extract.md             ← 画像 → 中間表現 抽出プロンプト
 ├── examples/
 │   ├── sample_topology_small.yaml
 │   ├── sample_topology_medium.yaml
 │   └── sample_topology_large.yaml
+├── tests/                         ← v2d の単体・回帰テスト（pytest）
 └── yang/
     └── iida-network-model.yang    ← YANG モデル定義
 ```
@@ -327,6 +342,95 @@ LLM は以下の観点で 10 点満点で評価します。ルールベースチ
 | ラベル網羅性（taillabel / headlabel / IP） | 3 点 |
 | ゾーン分類（subgraph cluster の適切な設定） | 2 点 |
 | デザイン品質（視認性・線の交差最小化） | 2 点 |
+
+## v2d — 画像からトポロジ YAML を生成（vision-to-diagram）
+
+d2v の逆変換です。ネットワーク構成図の**画像（PNG / JPEG）**をマルチモーダル LLM で解析し、
+`iida-network-model` YAML を生成します。出力は d2v の入力と同一スキーマなので、
+**画像 → v2d → YAML → d2v → 図** の往復ループが可能です。
+
+```
+構成図画像 (PNG/JPEG)
+        │
+        ▼
+   preprocess.py    ← 向き補正・RGB化・リサイズ・データURL化
+        │
+        ▼
+   extractor.py     ← vision LLM で中間表現（ノード/エッジ/ゾーン）を抽出
+        │
+        ▼
+   refine.py        ← 重複マージ・不整合エッジ除去・zone 補完
+        │
+        ▼
+   converter.py     ← iida-network-model YAML へ変換
+        │
+        ▼
+   evaluate.py      ← 正解との一致率計測 / d2v で再描画
+```
+
+### 使い方
+
+```bash
+# 画像からトポロジ YAML を生成
+python main.py v2d --input diagram.png
+
+# 出力先を指定
+python main.py v2d -i diagram.png -o output/v2d
+
+# 正解 YAML を指定して抽出精度を計測
+python main.py v2d -i diagram.png -t examples/sample_topology_small.yaml
+
+# 生成した YAML を d2v で再描画し往復ループを閉じる
+python main.py v2d -i diagram.png --rerender
+```
+
+```
+オプション:
+  -i, --input IMAGE       入力画像ファイル（PNG / JPEG・必須）
+  -o, --output-dir DIR    出力ディレクトリ（デフォルト: output/v2d）
+  -t, --truth YAML        正解トポロジ YAML（指定すると抽出精度を計測）
+      --rerender          生成 YAML を d2v で再描画（LLM を使用）
+  -f, --format {png,svg}  再描画時の出力フォーマット（デフォルト: png）
+```
+
+> v2d は画像入力に対応した LLM が必要です（例: Azure OpenAI gpt-4o / gpt-5.x）。
+> `.env` の `LLM_PROVIDER` を vision 対応プロバイダーに設定してください。
+
+### 出力ファイル
+
+```
+output/v2d/
+├── <stem>.yaml         ← 抽出した iida-network-model YAML（d2v で再描画可能）
+└── <stem>.v2d.json     ← サイドカー（確信度・所見・補正内容・カウント）
+```
+
+サイドカー JSON には、総合確信度・ノード/エッジ/ゾーン数・d2v での再パース結果カウント・
+整合性補正の内容（マージ/除去）・読み取れなかった箇所の所見・低確信度ノードが記録されます。
+
+### 入力サンプル
+
+d2v が生成した図（[`images/`](images/)）をそのまま v2d の入力に使えます（往復テスト）。
+
+```bash
+python main.py v2d -i images/sample_topology_small_best.png \
+  -t examples/sample_topology_small.yaml --rerender
+```
+
+### 対応範囲と制約
+
+**対応**: 矩形ノード＋直線/直交コネクタで描かれた構成図（draw.io / PowerPoint 書き出し /
+Graphviz 由来 / d2v 出力）。ホスト名・IP・ポート名・ゾーン枠を持つもの。目安 30 ノード以下。
+
+**制約・非対応**:
+- 手描き・写真撮影で歪みや傾きが大きい画像
+- 曲線が多用され交差が激しい「蜘蛛の巣」状の配線
+- テキストを持たずアイコンだけのノード
+- 50 ノード超の大規模図
+- 幅 800px 未満（文字認識精度が低下。1200px 以上を推奨）
+
+**既知の限界**: 微小な文字（loopback IP など）は誤読することがあります。読み取れない値は
+捏造せず省略し、サイドカーの所見に記録します。構造（ノード・エッジ）は高精度で、
+評価では **ノード F1 = 1.00 / エッジ F1 ≥ 0.83** を達成しています。
 
 ## ライセンス
 

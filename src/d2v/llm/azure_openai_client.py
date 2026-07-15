@@ -62,7 +62,26 @@ class AzureOpenAIClient(LLMClient):
             # gpt-5.x 系は max_tokens 非対応で max_completion_tokens を要求する
             "max_completion_tokens": self._max_tokens,
         }
+        return self._post(body)
 
+    def chat_with_images(
+        self, system: str, user: str, image_data_urls: list[str]
+    ) -> str:
+        # OpenAI 互換の vision 形式（content 配列に text と image_url を混在）
+        content: list[dict] = [{"type": "text", "text": user}]
+        for url in image_data_urls:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        body = {
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+            "max_completion_tokens": self._max_tokens,
+        }
+        return self._post(body)
+
+    def _post(self, body: dict) -> str:
+        """共通の POST 処理。429/5xx・接続エラーを指数バックオフで自動リトライする。"""
         last_error: str = ""
         for attempt in range(self._max_retries + 1):
             try:

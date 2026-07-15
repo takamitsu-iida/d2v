@@ -25,3 +25,19 @@ class OpenAIClient(LLMClient):
             ],
         )
         return response.choices[0].message.content or ""
+
+    def chat_with_images(
+        self, system: str, user: str, image_data_urls: list[str]
+    ) -> str:
+        content: list[dict] = [{"type": "text", "text": user}]
+        for url in image_data_urls:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        response = self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=self._max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+        )
+        return response.choices[0].message.content or ""
