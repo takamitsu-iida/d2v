@@ -154,6 +154,74 @@ python main.py -i examples/sample_topology_large.yaml
 python main.py -i examples/sample_topology_small.yaml -f svg -t 9
 ```
 
+### 生成例（ギャラリー）
+
+以下は上記コマンドで実際に生成した図です。矢印なしの物理リンク（ポート名・IP セグメント付き）、
+淡いパステルのゾーン背景、バランスの取れた縦横比で描画されます。
+
+#### 小規模トポロジ（7 ノード）
+
+```bash
+python main.py -i examples/sample_topology_small.yaml
+```
+
+![小規模トポロジの構成図](images/sample_topology_small_best.png)
+
+#### 中規模トポロジ（23 ノード）
+
+```bash
+python main.py -i examples/sample_topology_medium.yaml -n 5
+```
+
+![中規模トポロジの構成図](images/sample_topology_medium_best.png)
+
+#### 大規模トポロジ（73 ノード・自動分割）
+
+ノード数がしきい値を超えると、全体を俯瞰する **俯瞰図** と、ゾーンごとの **詳細図** に自動分割されます。
+
+```bash
+python main.py -i examples/sample_topology_large.yaml
+```
+
+**俯瞰図（ゾーン単位の全体地図）**
+
+![大規模トポロジの俯瞰図](images/sample_topology_large_overview.png)
+
+**ゾーン詳細図**
+
+代表的なゾーンを 3 つピックアップして掲載します。
+
+**DC Fabric（Leaf/Spine）** — 多数の外部接続をゾーン集約ノードにまとめ、`rankdir=LR` で縦積みに調整
+
+![DC Fabric ゾーン詳細図](images/sample_topology_large_zone-dc-fabric.png)
+
+**DC Server（サーバ群）**
+
+![DC Server ゾーン詳細図](images/sample_topology_large_zone-dc-server.png)
+
+**DMZ（公開サーバ領域）**
+
+![DMZ ゾーン詳細図](images/sample_topology_large_zone-dmz.png)
+
+その他のゾーン詳細図:
+
+| ゾーン | 図 |
+|--------|-----|
+| WAN Edge | [wan-edge](images/sample_topology_large_zone-wan-edge.png) |
+| Security | [security](images/sample_topology_large_zone-security.png) |
+| DC Core | [dc-core](images/sample_topology_large_zone-dc-core.png) |
+| Campus 棟A / 棟B / 棟C | [bldg-a](images/sample_topology_large_zone-campus-bldg-a.png) / [bldg-b](images/sample_topology_large_zone-campus-bldg-b.png) / [bldg-c](images/sample_topology_large_zone-campus-bldg-c.png) |
+| Management | [management](images/sample_topology_large_zone-management.png) |
+
+多数の外部デバイスと接続するゾーン（DC Fabric など）は、他ゾーンへの境界を
+「ゾーン集約ノード」にまとめ、横長になりすぎないよう `rankdir=LR` で縦積みに調整されます。
+
+#### スコア推移
+
+改善ループを 2 回以上行った場合、イテレーションごとのスコア推移グラフが出力されます。
+
+![スコア推移グラフ](images/score_history.png)
+
 ### 出力ファイル
 
 ```

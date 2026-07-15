@@ -190,6 +190,11 @@ def _run_split(args: argparse.Namespace, diagrams: list) -> None:
             threshold=args.threshold,
             patience=args.patience,
             zone_opacity=args.zone_opacity,
+            # 俯瞰図はゾーン単位の全体地図用プロンプトを使う（個別デバイスを展開しない）
+            system_prompt_file=(
+                "diagram-system-overview.md" if diag.key == "overview"
+                else "diagram-system.md"
+            ),
         )
         # ベスト画像を出力ルートへ集約
         final_path = args.output_dir / f"{sub_stem}.{args.format}"

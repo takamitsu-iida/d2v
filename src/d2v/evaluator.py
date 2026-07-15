@@ -138,6 +138,7 @@ def evaluate(
     output_dir: Path,
     iteration: int = 0,
     threshold: int = 8,
+    is_overview: bool = False,
 ) -> EvaluationResult:
     """DOT コードを評価し EvaluationResult を返す。
 
@@ -153,6 +154,9 @@ def evaluate(
         output_dir: 評価結果 JSON の保存先
         iteration: 現在のループ回数（0 始まり）
         threshold: passed = True とするスコア閾値
+        is_overview: 俯瞰図（ゾーン単位の全体地図）の評価かどうか。True のとき
+            俯瞰図には不要なルール（subgraph cluster・taillabel/headlabel の有無）を
+            検証・減点対象から除外する。
 
     Returns:
         EvaluationResult
@@ -161,7 +165,11 @@ def evaluate(
     rule_checks = _run_rule_checks(dot_code, topology_text)
 
     # ── Step 2: LLM 評価 ──────────────────────────────────────────
-    system_prompt = _load_prompt("diagram-evaluator.md")
+    # 俯瞰図は詳細図と評価基準が異なるため専用プロンプトを使う
+    evaluator_prompt = (
+        "diagram-evaluator-overview.md" if is_overview else "diagram-evaluator.md"
+    )
+    system_prompt = _load_prompt(evaluator_prompt)
     user_message = (
         f"## トポロジデータ\n\n{topology_text}\n\n"
         f"## 評価対象 DOT コード\n\n```dot\n{dot_code}\n```"
@@ -178,13 +186,16 @@ def evaluate(
     if not rule_checks.edge_count_ok:
         rule_issues.append("DOT のエッジ数が入力データに対して不足しています。全接続を定義してください。")
         score = min(score, 5)
-    if not rule_checks.has_subgraph_cluster:
-        rule_issues.append("subgraph cluster が定義されていません。zone ごとにグループ化してください。")
-        score = min(score, 7)
-    if not rule_checks.has_taillabel:
-        rule_issues.append("エッジに taillabel（送信元ポート名）が設定されていません。")
-    if not rule_checks.has_headlabel:
-        rule_issues.append("エッジに headlabel（宛先ポート名）が設定されていません。")
+    # 俯瞰図は 1 ゾーン=1 ノードの全体地図なので、cluster やポート名ラベルは不要。
+    # 詳細図用のこれらのルールは俯瞰図では適用しない。
+    if not is_overview:
+        if not rule_checks.has_subgraph_cluster:
+            rule_issues.append("subgraph cluster が定義されていません。zone ごとにグループ化してください。")
+            score = min(score, 7)
+        if not rule_checks.has_taillabel:
+            rule_issues.append("エッジに taillabel（送信元ポート名）が設定されていません。")
+        if not rule_checks.has_headlabel:
+            rule_issues.append("エッジに headlabel（宛先ポート名）が設定されていません。")
 
     # ルール由来の issues を先頭に追加（LLM issues が後続）
     issues = rule_issues + issues

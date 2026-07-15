@@ -7,6 +7,7 @@ import sys
 from d2v.config import settings
 
 from .anthropic_client import AnthropicClient
+from .azure_openai_client import AzureOpenAIClient
 from .base import LLMClient
 from .ollama_client import OllamaClient
 from .openai_client import OpenAIClient
@@ -28,6 +29,13 @@ _MISSING_KEY_MESSAGES: dict[str, str] = {
         "  LLM_PROVIDER=openai\n"
         "  OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx\n"
         "  OPENAI_MODEL=gpt-4o"
+    ),
+    "azure": (
+        "Azure OpenAI の認証情報が設定されていません。\n"
+        ".env に以下を追加してください:\n"
+        "  LLM_PROVIDER=azure\n"
+        "  AZURE_OPENAI_API_KEY=xxxxxxxxxxxxxxxxxxxx\n"
+        "  AZURE_OPENAI_ENDPOINT=https://<ホスト>/.../gpt/<モデル>"
     ),
     "anthropic": (
         "Anthropic API キーが設定されていません。\n"
@@ -60,6 +68,7 @@ def get_llm() -> LLMClient:
 
     対応プロバイダー:
         openai    : OpenAIClient (デフォルト)
+        azure     : AzureOpenAIClient (Azure OpenAI Service)
         anthropic : AnthropicClient
         ollama    : OllamaClient (ローカル LLM)
 
@@ -79,6 +88,22 @@ def get_llm() -> LLMClient:
             )
         except Exception:
             _abort_missing_credentials("openai")
+
+    if provider == "azure":
+        if not (
+            settings.azure_openai_api_key.get_secret_value()
+            and settings.azure_openai_endpoint
+        ):
+            _abort_missing_credentials("azure")
+        try:
+            return AzureOpenAIClient(
+                api_key=settings.azure_openai_api_key.get_secret_value(),
+                endpoint=settings.azure_openai_endpoint,
+                max_tokens=settings.llm_max_tokens,
+                max_retries=settings.max_retries,
+            )
+        except Exception:
+            _abort_missing_credentials("azure")
 
     if provider == "anthropic":
         if not settings.anthropic_api_key.get_secret_value():
@@ -104,7 +129,7 @@ def get_llm() -> LLMClient:
 
     print(
         f"\n[設定エラー] 未対応の LLM プロバイダー: '{provider}'\n"
-        "LLM_PROVIDER は 'openai' / 'anthropic' / 'ollama' のいずれかを指定してください。"
+        "LLM_PROVIDER は 'openai' / 'azure' / 'anthropic' / 'ollama' のいずれかを指定してください。"
         f"{_SETUP_HINT}\n",
         file=sys.stderr,
     )
@@ -115,6 +140,7 @@ __all__ = [
     "LLMClient",
     "get_llm",
     "OpenAIClient",
+    "AzureOpenAIClient",
     "AnthropicClient",
     "OllamaClient",
 ]

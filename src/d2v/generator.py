@@ -93,17 +93,23 @@ def _looks_truncated(dot_code: str) -> bool:
 
 
 
-def generate(topology_text: str, improvement_hints: list[str] | None = None) -> str:
+def generate(
+    topology_text: str,
+    improvement_hints: list[str] | None = None,
+    system_prompt_file: str = "diagram-system.md",
+) -> str:
     """トポロジテキストを LLM に渡し、Graphviz DOT コードを返す。
 
     Args:
         topology_text: parser.parse() が返す構造化トポロジテキスト
         improvement_hints: 改善ループ時に渡す改善点リスト（初回は None）
+        system_prompt_file: 使用するシステムプロンプトファイル名。俯瞰図など
+            用途に応じて切り替える（デフォルトはデバイス詳細図用）。
 
     Returns:
         Graphviz DOT 形式のコード文字列
     """
-    system_prompt = _load_prompt("diagram-system.md")
+    system_prompt = _load_prompt(system_prompt_file)
 
     directive = _completeness_directive(topology_text)
 

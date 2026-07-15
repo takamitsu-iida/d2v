@@ -93,6 +93,7 @@ def run(
     threshold: int = 8,
     patience: int = 1,
     zone_opacity: float = 0.4,
+    system_prompt_file: str = "diagram-system.md",
 ) -> PipelineResult:
     """生成 → 評価 → 改善ループを実行する。
 
@@ -115,6 +116,8 @@ def run(
             （改善が頭打ちの場合に無駄なイテレーションを省き高速化する）
         zone_opacity: ゾーン（cluster）背景色の不透明度 0.0〜1.0。1.0 未満のとき
             背景色を淡く（透過）してレンダリングする。
+        system_prompt_file: DOT 生成に使うシステムプロンプトファイル名。俯瞰図など
+            用途に応じて切り替える（デフォルトはデバイス詳細図用）。
 
     Returns:
         PipelineResult（ベストスコアの DOT・画像・評価結果を含む）
@@ -130,7 +133,9 @@ def run(
 
         # ── 生成 ────────────────────────────────────────────────
         console.print("  [dim][1/3] DOT コード生成中...[/dim]")
-        dot_code = generator.generate(topology_text, improvement_hints)
+        dot_code = generator.generate(
+            topology_text, improvement_hints, system_prompt_file=system_prompt_file
+        )
 
         # ── レンダリング ─────────────────────────────────────────
         console.print("  [dim][2/3] Graphviz レンダリング中...[/dim]")
@@ -163,6 +168,7 @@ def run(
             output_dir=iter_dir,
             iteration=i,
             threshold=threshold,
+            is_overview="overview" in system_prompt_file,
         )
 
         # ── ベスト更新判定 ───────────────────────────────────────

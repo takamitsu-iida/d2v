@@ -35,6 +35,10 @@
 - 多数の平行リンクが重なって潰れないよう、`nodesep`/`ranksep` を大きめにとり、必要に応じて `splines=true`（曲線）で線を分離してください。
 - 密なメッシュではエッジ中央の `label`（IP セグメント）がラベル同士で重なりやすいため、`taillabel`/`headlabel`（ポート名）を優先し、中央 `label` は `decorate=true` や `labeldistance` の調整で潰れを避けてください。それでも過密で判読不能になる場合に限り、p2p リンク（/30 等）の中央 IP ラベルは省略してポート名を優先しても構いません（ノード・エッジ自体は必ず全て描くこと）。
 
+1-c. 縦横比のバランス（極端な横長の回避）
+- 図全体の縦横比は「幅 : 高さ ＝ 4 : 3」程度のバランスの取れた形を目安にしてください。1 枚の図が極端に横長（帯状）にならないようにします。
+- 多数のノードが 1 つの階層（tier）に並ぶ場合（例: leaf を 8 台横一列）は、`{rank=same}` で 1 行に詰め込みすぎると横に伸びます。ノードが多いファンアウト型のゾーンでは `rankdir=LR`（左右方向）を用い、同種ノードを縦方向の列に積むと、縦長で読みやすくなります。
+
 2. ネットワークSE向けのアイコン・表現ルール
 ノードの名称（label）には、役割が直感的に伝わるよう必ず以下の絵文字とテキストを含めてください。
 - ルータ: 🌐 [ホスト名]
@@ -48,11 +52,14 @@
 - リンクを示す線（edge）には、必ず「どのポートからどのポートへ繋がっているか」がわかるよう、taillabel（送信元ポート）とheadlabel（宛先ポート）を明記してください。（例:
 taillabel="Gi0/1", headlabel="Eth1/1"）
 - 接続セグメントのネットワークアドレス（例: 10.1.12.0/30）が判明している場合は、線のラベル（label）として中央に記載してください。
+- 物理リンクは双方向で向きを持たないため、エッジには `dir=none` を指定して矢じりを付けないでください（上記の edge デフォルトで一括指定済み）。
 
 4. ネットワークゾーン（サブグラフ）によるグループ化
 - 機器の役割や所属するセグメントごとに、背景色を変えた「subgraph cluster」でグルーピングしてください。
 - 例: 「WAN/インターネット境界」「コアLAN（背骨）」「DMZ（公開サーバ領域）」「拠点A」など。
-- 各 cluster には `label`、`style="filled"`、`color`、`bgcolor` を必ず設定してください。- **cluster の `bgcolor` は非常に淡いパステル色（明度の高い淡色、目安として HTML の `#F0`～`#FF` 帯の明るい色）のみを使用**してください。ノードの文字・ラベルが埋もれないよう、濃い色や彩度の高い背景色（例: `#1A73E8` のような原色系）は禁止です。
+- 各 cluster には `label`、`bgcolor`（淡い背景色）、`color`（枠線色）、`fontcolor`（ラベル文字色）を設定してください。
+- **cluster には `style="filled"` を設定しないでください。** cluster に `style="filled"` を付けると Graphviz は `bgcolor` を無視して濃い枠線色で塗りつぶしてしまい、背景がドギツくなります。背景色は `bgcolor` のみで指定します。
+- **cluster の `bgcolor` は非常に淡いパステル色（明度の高い淡色、目安として HTML の `#F0`～`#FF` 帯の明るい色）のみを使用**してください。ノードの文字・ラベルが埋もれないよう、濃い色や彩度の高い背景色（例: `#1A73E8` のような原色系）は禁止です。
 - cluster の枠線色（`color`）とラベル文字色（`fontcolor`）には濃めの色を使い、淡い背景の上で見出しがはっきり読めるようにしてください。
 # 出力フォーマット
 出力は、Markdownのコードブロック（```dot ...
@@ -68,7 +75,7 @@ digraph G {
     splines=true;        // エッジを曲線で分離し重なりを緩和
     fontname="Helvetica,Arial,sans-serif";
     node [fontname="Helvetica,Arial,sans-serif", fontsize=10, shape=box, style="filled,rounded", fixedsize=false, width=1.5];
-    edge [fontname="Helvetica,Arial,sans-serif", fontsize=8, color="#4A5568", penwidth=1.5];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=8, color="#4A5568", penwidth=1.5, dir=none];  // 物理リンクは無向（矢じりなし）
     rankdir=TB; // 上から下への階層配置を基本とする
 
     // ノードカラー定義
@@ -78,6 +85,7 @@ digraph G {
     // サーバ・ホスト（黄系）: fillcolor="#FFF8E1", color="#E37400"
 
     // cluster bgcolor 例（いずれも淡いパステル色。文字が埋もれないよう濃色は使わない）
+    // cluster には style="filled" を付けない（付けると bgcolor が無視され濃色で塗られる）
     // ラベルは fontcolor に濃色を指定して読みやすくする
     // WAN/Edge: bgcolor="#F8F9FA", color="#5F6368", fontcolor="#3C4043"
     // Core:     bgcolor="#E8F5E9", color="#137333", fontcolor="#0B5394"
