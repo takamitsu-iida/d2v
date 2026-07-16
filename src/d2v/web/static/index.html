@@ -28,6 +28,7 @@
     <button class="tab active" data-tab="d2v" role="tab">d2v: YAML → 図</button>
     <button class="tab" data-tab="v2d" role="tab">v2d: 画像 → YAML</button>
     <button class="tab" data-tab="validate" role="tab">検証: design lint</button>
+    <button class="tab" data-tab="diff" role="tab">diff: 差分</button>
   </nav>
 
   <main>
@@ -258,6 +259,70 @@
             <div id="val-details" hidden></div>
           </div>
           <p class="placeholder" id="val-idle">対象を選び、「検証する」を押してください。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ diff タブ ============ -->
+    <section class="panel" id="panel-diff" role="tabpanel" hidden>
+      <div class="layout">
+        <!-- 左: before / after 入力 -->
+        <div class="col-form">
+          <form id="diff-form">
+            <fieldset>
+              <legend>変更前（before）</legend>
+              <div class="radio-row">
+                <label><input type="radio" name="diff-before-source" value="example" checked /> サンプル</label>
+                <label><input type="radio" name="diff-before-source" value="text" /> 貼り付け</label>
+              </div>
+              <div class="diff-src-block" data-side="before" data-src="example">
+                <select id="diff-before-example"></select>
+              </div>
+              <div class="diff-src-block" data-side="before" data-src="text" hidden>
+                <textarea id="diff-before-text" rows="8" placeholder="変更前の YAML を貼り付け"></textarea>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>変更後（after）</legend>
+              <div class="radio-row">
+                <label><input type="radio" name="diff-after-source" value="example" checked /> サンプル</label>
+                <label><input type="radio" name="diff-after-source" value="text" /> 貼り付け</label>
+              </div>
+              <div class="diff-src-block" data-side="after" data-src="example">
+                <select id="diff-after-example"></select>
+              </div>
+              <div class="diff-src-block" data-side="after" data-src="text" hidden>
+                <textarea id="diff-after-text" rows="8" placeholder="変更後の YAML を貼り付け"></textarea>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>オプション</legend>
+              <label class="checkbox"><input type="checkbox" id="diff-summarize" /> LLM で自然言語要約（--summarize）</label>
+              <label class="row"><span>差分図フォーマット</span>
+                <select id="diff-format"><option value="png">png</option><option value="svg">svg</option></select>
+              </label>
+            </fieldset>
+            <button type="submit" id="diff-run-btn" class="primary">▶ 差分を比較</button>
+          </form>
+        </div>
+
+        <!-- 右: 結果 -->
+        <div class="col-result">
+          <div id="diff-result-wrap" hidden>
+            <h3>差分結果 <span id="diff-summary-badge" class="badge"></span></h3>
+            <div id="diff-summary-error" class="warn-note" hidden></div>
+            <div id="diff-nl-summary" class="nl-summary" hidden></div>
+            <div class="detail-tabs">
+              <button class="ddtab active" data-dd="changes">変更点</button>
+              <button class="ddtab" data-dd="image">差分図</button>
+            </div>
+            <div id="diff-changes"></div>
+            <div id="diff-image-wrap" hidden>
+              <img id="diff-image" alt="差分図" />
+              <div class="downloads"><a id="diff-image-dl" href="#" download>差分図をダウンロード</a></div>
+            </div>
+          </div>
+          <p class="placeholder" id="diff-idle">変更前・変更後を選び、「差分を比較」を押してください。</p>
         </div>
       </div>
     </section>

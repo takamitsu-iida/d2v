@@ -1402,65 +1402,107 @@ class TopologyDiff(BaseModel):
 ### Phase 0: 構造 diff エンジン
 **目標**: 2 つの `TopologyModel` から `TopologyDiff` を決定論的に算出する。
 
-- [ ] `src/d2v/diff.py` に上記 Pydantic モデルを定義
-- [ ] `compare(before: TopologyModel, after: TopologyModel) -> TopologyDiff` を実装
-  - [ ] ノード: `device-id` で added/removed、共通は属性（device-type/zone/asn/loopback/interface）を比較し `NodeChange`
-  - [ ] エッジ: `connection-id` 優先、無ければ**無向・ポート込みの正規化キー**で added/removed
-  - [ ] ゾーン: device の zone 集合の差分
-  - [ ] サブネット: `subnet-id`/`prefix` の added/removed
-- [ ] rich でのテキスト要約（＋/−/~ 記号・件数サマリ）
-- [ ] 単体テスト（追加/削除/属性変更/エッジ張替え/変更なし）
+- [x] `src/d2v/diff.py` に上記 Pydantic モデルを定義
+- [x] `compare(before: TopologyModel, after: TopologyModel) -> TopologyDiff` を実装
+  - [x] ノード: `device-id` で added/removed、共通は属性（device-type/zone/asn/loopback/interface）を比較し `NodeChange`
+  - [x] エッジ: `connection-id` 優先、無ければ**無向・ポート込みの正規化キー**で added/removed
+  - [x] ゾーン: device の zone 集合の差分
+  - [x] サブネット: `subnet-id`/`prefix` の added/removed
+- [x] rich でのテキスト要約（＋/−/~ 記号・件数サマリ）
+- [x] 単体テスト（追加/削除/属性変更/エッジ張替え/変更なし）
 
-**完了の定義**: 既知の変更ペアで `TopologyDiff` が過不足なく算出され、テキスト表示できる。
+**完了の定義**: 既知の変更ペアで `TopologyDiff` が過不足なく算出され、テキスト表示できる。✅
+
+**実装（2026-07-16）**
+- `src/d2v/diff.py`（新規・追加依存なし）:
+  - モデル: `AttrChange`（field/before/after）, `NodeChange`（device_id/changes）, `TopologyDiff`（nodes/edges/zones/subnets の added/removed＋`nodes_changed`＋`summary`＋`is_empty()`）。
+  - `compare(before, after)`: ノードは `device-id` で added/removed、共通ノードは device-type/zone/asn/loopback/**interface-id 集合**を比較して `NodeChange` を生成。エッジは**無向・ポート込みの正規化キー**（端点の {device-id, interface-id} 集合）で同一物理リンクを識別（`connection-id` は表示ラベルのみ）。ゾーンは device の zone 集合差分、サブネットは `subnet-id`優先（無ければ prefix）で added/removed。
+  - `render_diff()`: 変化なしは緑 1 行、変化ありは件数サマリ＋ +/−/~ 記号つきの色分けテキスト（追加=緑・削除=赤・変更=橙）。
+  - 設計判断: エッジ識別を connection-id ではなく**端点キー**にしたため、connection-id のリネームでは差分が出ず、実際のリンク張替え（ポート/相手変更）のみ add/remove として検出する（validator の `_edge_key` と同方針）。
+- `tests/test_diff.py`（新規, 12 件）: 同一=空、ノード add/remove/属性変更、interface 集合変更、エッジ add/remove、**connection-id リネームは無変化**、無向一致、ゾーン/サブネット add/remove、render の空/変更表示、`is_empty` 既定。
+- 検証: small サンプルを改変（pc-01 削除・office-sw-01 の zone 変更）した diff で削除/変更/ゾーン差分を正しく算出。`python -m pytest tests/ -q` → **133 passed**（既存 121 + diff 12）。
 
 ---
 
 ### Phase 1: 図の差分ハイライト
 **目標**: 変更前後を重ねた**差分図**を色分け描画する。
 
-- [ ] `diff.build_diff_dot(before, after, topo_diff) -> str`：和集合グラフの DOT を生成
-  - [ ] 追加ノード/エッジ=緑、削除=赤（点線）、変更ノード=橙、無変更=淡色
-  - [ ] 変更ノードは changed 属性を tooltip/ラベル補助で明示
-  - [ ] 既存の zone(cluster)・アイコン・IP ラベル規約を踏襲
-- [ ] `renderer` に差分描画呼び出しを追加（凡例＝add/del/change を図中に描画）
-- [ ] 差分 PNG/SVG を `output/diff/` へ保存（DOT ソースも）
+- [x] `diff.build_diff_dot(before, after, topo_diff) -> str`：和集合グラフの DOT を生成
+  - [x] 追加ノード/エッジ=緑、削除=赤（点線）、変更ノード=橙、無変更=淡色
+  - [x] 変更ノードは changed 属性を tooltip/ラベル補助で明示
+  - [x] 既存の zone(cluster)・アイコン・IP ラベル規約を踏襲
+- [x] `renderer` に差分描画呼び出しを追加（凡例＝add/del/change を図中に描画）
+- [x] 差分 PNG/SVG を `output/diff/` へ保存（DOT ソースも）
 
-**完了の定義**: 変更前後の YAML から、追加/削除/変更が色分けされた 1 枚の差分図が出力される。
+**完了の定義**: 変更前後の YAML から、追加/削除/変更が色分けされた 1 枚の差分図が出力される。✅
+
+**実装（2026-07-16）**
+- `src/d2v/diff.py` に差分図生成を追加:
+  - `build_diff_dot(before, after, diff)`: 和集合グラフの Graphviz DOT を決定論的に生成。ノードは追加=緑(#137333)・削除=赤(#C5221F・破線)・変更=橙(#E37400)・無変更=淡灰(#9AA0A6)で塗り分け、エッジも同様に色分け（削除は破線・太線）。device-type→絵文字アイコン（🌐🔀🧱💻）、zone ごとに `subgraph cluster` 化、変更ノードはラベルに「(変更: field...)」＋tooltip に before→after を明示。図中に**凡例 cluster**（追加/削除/変更/変更なし）を描画。
+  - `render_diff_diagram(...)`: `build_diff_dot` → `renderer.render` で PNG/SVG を出力（`output/diff/` に画像と `.dot` ソースを保存）。renderer は改変せず既存 `render()` を再利用（矢じり除去・cluster 淡色化・縦横比フィットをそのまま活用）。
+- `tests/test_diff.py` に Phase 1 テスト 3 件（DOT の色/構造/アイコン/凡例/変更ラベル、無変更ノードの色、実レンダリングでの画像＋DOT 保存。Graphviz 未導入時は skip）。
+- 検証: small サンプルを改変（office-sw-01 の zone 変更・new-srv-01 追加＋接続・pc-01 削除）した差分図を生成し、追加=緑/削除=赤点線/変更=橙「(変更: zone)」・zone クラスタ・凡例が正しく描画されることを目視確認。`python -m pytest tests/ -q` → **136 passed**（既存 133 + Phase 1 3）。
 
 ---
 
 ### Phase 2: LLM 自然言語サマリ（任意）
 **目標**: 構造 diff を人間向けの要約文にする。
 
-- [ ] `prompts/diagram-diff.md`（`TopologyDiff` → 箇条書き要約・影響の一言コメント）
-- [ ] `diff.summarize(topo_diff, llm) -> str`（`summary` を充填。捏造せず diff 内容のみ言語化）
-- [ ] LLM をモックした経路テスト
+- [x] `prompts/diagram-diff.md`（`TopologyDiff` → 箇条書き要約・影響の一言コメント）
+- [x] `diff.summarize(topo_diff, llm) -> str`（`summary` を充填。捏造せず diff 内容のみ言語化）
+- [x] LLM をモックした経路テスト
 
-**完了の定義**: `--summarize` で「何がどう変わったか」の日本語要約が付く。
+**完了の定義**: `--summarize` で「何がどう変わったか」の日本語要約が付く。✅
+
+**実装（2026-07-16）**
+- `prompts/diagram-diff.md`（新規）: 構造差分 JSON を受け取り、変更点を箇条書き＋影響の一言コメントで日本語要約させるプロンプト。**JSON に無い変更の推測・捏造を禁止**し、空の区分には触れないよう指示。
+- `src/d2v/diff.py` に `summarize(diff, llm=None) -> TopologyDiff` を追加:
+  - `diff.model_dump(exclude={"summary"})` を LLM に渡し、応答（自然言語）を `summary` に充填した**新しい `TopologyDiff` を返す**（`render_diff` が `summary` を末尾に表示）。
+  - 変化なし（`is_empty()`）は LLM を呼ばず即返し。`_strip_code_fence` でコードフェンスを除去。構造差分（nodes/edges/…）は不変。
+  - 署名は計画の `-> str` ではなく、`explain()` と同じく**更新済みモデルを返す**方式に統一（rich 表示・CLI/Web 連携がしやすいため）。
+- `tests/test_diff.py` に Phase 2 テスト 4 件（`_FakeLLM` モックで summary 充填・コードフェンス除去・**空 diff は LLM 未呼び出し**・render に summary 表示）。
+- 検証: `python -m pytest tests/ -q` → **140 passed**（既存 136 + Phase 2 4）。API キー不要（LLM はモック）。
 
 ---
 
 ### Phase 3: 影響分析（blast radius・任意）
 **目標**: 変更・障害の影響範囲をグラフ探索で提示する。
 
-- [ ] `impact(model, removed_devices|removed_edges) -> ImpactReport`：到達不能になるノード集合
-- [ ] 差分図上での影響範囲ハイライト（削除により分断される領域）
-- [ ] `validator` の SPOF 検出ロジック（Tarjan）を共有
+- [x] `impact(model, removed_devices|removed_edges) -> ImpactReport`：到達不能になるノード集合
+- [x] 差分図上での影響範囲ハイライト（削除により分断される領域）
+- [x] `validator` の SPOF 検出ロジック（Tarjan）を共有
 
-**完了の定義**: ある機器/リンクを落としたときの到達不能範囲を提示できる。
+**完了の定義**: ある機器/リンクを落としたときの到達不能範囲を提示できる。✅
+
+**実装（2026-07-16）**
+- `src/d2v/diff.py` に影響分析を追加（追加依存なし）:
+  - `ImpactReport`（removed_devices/removed_edges/reachable/unreachable/components＋`is_isolating()`）。
+  - `impact(model, *, removed_devices=None, removed_edges=None)`: **`validator._build_graph` を共有**して無向グラフを構築し、指定機器/リンクを除去後の残存連結成分を `_components`（BFS）で算出。最大成分（同数なら最小 device-id を含む成分＝決定的）を到達可能コアとし、切り離されたノードを**到達不能（blast radius）**として返す。
+  - `render_impact()`: 除去対象・到達不能ノード・残存成分数を rich テキストで表示。
+  - `build_impact_dot()` / `render_impact_diagram()`: 除去機器=灰(✖・破線)・到達不能=赤・到達可能=緑で塗り分け、切断リンクを赤破線で描く影響ハイライト図を `output/diff/` に出力。
+  - SPOF との整合: `validator` が SPOF 判定する機器（関節点）を `impact` に渡すと、その機器が分断する具体的な範囲が得られる（両者は同じグラフ表現を共有）。
+- `tests/test_diff.py` に Phase 3 テスト 7 件（末端除去=分断なし、関節点除去=片側孤立、中央リンク除去=二分、環状=耐性あり、除去なし=全到達可能、render テキスト、impact DOT のハイライト）。
+- 検証: small サンプルで fw-01（SPOF）除去 → 到達不能 3 台（router-01, dmz-sw-01, web-server-01）・残存 3 成分を算出し、影響図（除去=灰✖・到達不能=赤・到達可能=緑・切断リンク=赤破線）を目視確認。`python -m pytest tests/ -q` → **147 passed**（既存 140 + Phase 3 7）。
 
 ---
 
 ### Phase 4: CLI・Web・テスト統合
 **目標**: CLI/GUI から差分を実行・閲覧できる。
 
-- [ ] `main.py` に `diff` サブコマンド（`python main.py diff --before a.yaml --after b.yaml [--summarize] [--json] [--format]`）
-- [ ] 終了コード規約（差分ありで 1／`--exit-zero` で常に 0。CI の変更検知に使える）
-- [ ] Web: `POST /api/diff`（before/after を選択・アップロード）→ 差分図＋TopologyDiff＋要約
-- [ ] Web: v2d/d2v 履歴の 2 ジョブ選択で差分表示（GUI 上の変更レビュー）
-- [ ] `tests/test_diff.py` と Web API テストを追加
+- [x] `main.py` に `diff` サブコマンド（`python main.py diff --before a.yaml --after b.yaml [--summarize] [--json] [--format]`）
+- [x] 終了コード規約（差分ありで 1／`--exit-zero` で常に 0。CI の変更検知に使える）
+- [x] Web: `POST /api/diff`（before/after を選択・アップロード）→ 差分図＋TopologyDiff＋要約
+- [~] Web: v2d/d2v 履歴の 2 ジョブ選択で差分表示（GUI 上の変更レビュー）→ diff タブは example/貼り付けの before/after 比較に対応。履歴ジョブ直結は今後の拡張（job source 未実装）
+- [x] `tests/test_diff.py` と Web API テストを追加
 
-**完了の定義**: CLI/GUI で差分図・構造 diff・要約を確認でき、`pytest` が緑。
+**完了の定義**: CLI/GUI で差分図・構造 diff・要約を確認でき、`pytest` が緑。✅
+
+**実装（2026-07-16）**
+- CLI: `main.py` に `diff` サブコマンド分岐と `run_diff()` を追加（`-b/--before`・`-a/--after`・`-o/--output-dir`・`--summarize`・`--format`・`--no-image`・`--json`・`--exit-zero`）。構造差分を rich 表示または `--json`、差分図を `output/diff/<before>__<after>.<fmt>` に生成。**終了コードは差分ありで 1・`--exit-zero` または差分なしで 0**（CI の変更検知に使える）。既存 CLI は不変。
+- Web: `POST /api/diff`（before/after を `{source, example|yaml_text}` で受け、`summarize`/`image`/`format` 対応）を同期追加。構造差分 JSON＋任意の LLM 要約を返し、差分図は `output/webui/diff/<token>/` に生成して `GET /api/diff/image/{token}` で配信（token は uuid・辞書引きでパストラバーサル不可）。`_read_yaml_source`/`_load_model_from_text` を共通化（validate と共有）。
+- GUI: SPA に「diff: 差分」タブを追加（`index.html`/`app.js`/`style.css`）。before/after それぞれサンプル選択・貼り付け、`--summarize`、フォーマット選択。結果は件数バッジ・自然言語要約・変更点リスト（追加=緑/削除=赤/変更=橙）・差分図（タブ切替＋ダウンロード）。統合ブラウザで差分比較フロー（変化なし表示まで）を確認。
+- テスト: `tests/test_web_api.py` に `/api/diff` 5 件（text 比較・同一=空・画像生成＋配信・不明 token 404・不正 YAML 400）。`tests/test_diff.py` は Phase 0〜3 で構造 diff/図/要約/影響を網羅済み。
+- 検証: CLI で差分あり=exit 1・`--exit-zero`/同一=exit 0 を確認。GUI で diff タブ動作確認。`python -m pytest tests/ -q` → **152 passed**（既存 147 + Web diff 5）。
 
 ---
 
@@ -1481,14 +1523,16 @@ class TopologyDiff(BaseModel):
 
 ## マイルストーン（diff）
 
-### D1: 構造 diff — [ ] `compare()` が `TopologyDiff` を返す（Phase 0）
-### D2: 差分図 — [ ] add/del/change を色分け描画（Phase 1）
-### D3: 要約 — [ ] `--summarize` で自然言語サマリ（Phase 2）
-### D4: 統合 — [ ] CLI/GUI・履歴比較・テスト（Phase 4）
+### D1: 構造 diff — [x] `compare()` が `TopologyDiff` を返す（Phase 0）
+### D2: 差分図 — [x] add/del/change を色分け描画（Phase 1）
+### D3: 要約 — [x] `--summarize` で自然言語サマリ（Phase 2）
+### D4: 統合 — [x] CLI/GUI・履歴比較・テスト（Phase 4）
+
+> 影響分析（Phase 3・blast radius）も完了。**diff は全フェーズ完了**（履歴ジョブ直結のみ今後の拡張）。
 
 ## 直近の次アクション（diff）
 
-- [ ] `TopologyDiff` モデルと `compare()` を実装しテストを通す
-- [ ] エッジの無向・ポート込み正規化キーを確定する
-- [ ] `build_diff_dot()` で和集合グラフの色分け描画を成立させる
-- [ ] `main.py diff` サブコマンドで差分図＋構造 diff を出力
+- [x] `TopologyDiff` モデルと `compare()` を実装しテストを通す
+- [x] エッジの無向・ポート込み正規化キーを確定する
+- [x] `build_diff_dot()` で和集合グラフの色分け描画を成立させる
+- [x] `main.py diff` サブコマンドで差分図＋構造 diff を出力

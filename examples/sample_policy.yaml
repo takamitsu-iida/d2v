@@ -1,21 +1,131 @@
-# d2v セマンティック検証（validate）用のサンプルポリシー。
+# ============================================================================
+# d2v セマンティック検証（validate）用サンプルポリシー
+# 一般的な企業ネットワークのベストプラクティスを機械可読にしたもの。
+# ============================================================================
 #
 # 使い方:
-#   python main.py validate -i examples/sample_topology_small.yaml \
+#   python main.py validate -i examples/sample_topology_large.yaml \
 #       --policy examples/sample_policy.yaml
 #
-# セレクタ（from/to/via/zone）は文字列または {zone: .., type: ..} で指定する。
-# 文字列は zone 名または device-type のどちらかに一致すれば対象になる。
+# セレクタの書き方:
+#   - 文字列        … zone 名または device-type のどちらかに一致（例: dmz / firewall）
+#   - {zone: xxx}   … zone 名で厳密一致
+#   - {type: xxx}   … device-type で厳密一致（router/switch/firewall/server/host/load-balancer）
+#
+# 補足:
+#   - via は device-type "firewall" で指定すると全トポロジで頑健に機能する
+#     （ゾーン名はトポロジごとに異なるため）。
+#   - 対象ゾーン/種別が存在しないトポロジでは、そのルールは自動的にスキップされる
+#     （誤検出は発生しない）。
+#   - severity は error / warning / info（zone-transit の既定は error、
+#     zone-redundancy の既定は warning）。
 
-# ゾーン間通信ポリシー: src から dst への通信は必ず via を経由すること。
+# ----------------------------------------------------------------------------
+# 1. ネットワークセグメンテーション / セキュリティ境界（zone-transit）
+#    「src から dst への通信は、必ず via（ファイアウォール等）を経由すること」。
+#    via を通らずに到達できる裏道（迂回経路）があれば違反。
+# ----------------------------------------------------------------------------
 zone-transit:
-  # DMZ から社内オフィスへ向かう通信は firewall を経由すること。
+  # --- DMZ の隔離: DMZ と内部セグメントの通信は必ず FW を経由する ---
   - name: dmz-to-office-via-firewall
     from: dmz
     to: office
-    via: firewall
+    via: { type: firewall }
+    severity: error
 
-# ゾーン冗長ポリシー: 対象デバイスは単一障害点であってはならない。
+  - name: dmz-to-server-via-firewall
+    from: dmz
+    to: { type: server }
+    via: { type: firewall }
+    severity: error
+
+  - name: dmz-to-datacenter-via-firewall
+    from: dmz
+    to: dc-server
+    via: { type: firewall }
+    severity: error
+
+  # --- 管理セグメントの保護: 管理系への通信は必ず FW を経由する ---
+  - name: dmz-to-management-via-firewall
+    from: dmz
+    to: management
+    via: { type: firewall }
+    severity: error
+
+  - name: internet-to-management-via-firewall
+    # インターネット境界（WAN エッジ）から管理系への直通は禁止
+    from: wan-edge
+    to: management
+    via: { type: firewall }
+    severity: error
+
+  # --- インターネット向け egress: 内部からの外部通信は必ず FW を経由する ---
+  - name: office-egress-via-firewall
+    from: office
+    to: wan-edge
+    via: { type: firewall }
+    severity: error
+
+  - name: server-egress-via-firewall
+    from: { type: server }
+    to: wan-edge
+    via: { type: firewall }
+    severity: error
+
+  - name: datacenter-egress-via-firewall
+    from: dc-server
+    to: wan-edge
+    via: { type: firewall }
+    severity: error
+
+  # --- 東西トラフィックの制御: キャンパスからデータセンターは FW/セキュリティ経由 ---
+  - name: campus-a-to-datacenter-via-firewall
+    from: campus-bldg-a
+    to: dc-server
+    via: { type: firewall }
+    severity: warning
+
+  - name: campus-b-to-datacenter-via-firewall
+    from: campus-bldg-b
+    to: dc-server
+    via: { type: firewall }
+    severity: warning
+
+  - name: campus-c-to-datacenter-via-firewall
+    from: campus-bldg-c
+    to: dc-server
+    via: { type: firewall }
+    severity: warning
+
+# ----------------------------------------------------------------------------
+# 2. 高可用性 / 冗長化（zone-redundancy）
+#    「対象デバイスは単一障害点であってはならない」。
+#    対象が関節点（cut vertex）や橋の端点なら違反（＝冗長経路が無い）。
+# ----------------------------------------------------------------------------
 zone-redundancy:
-  # core ゾーンの機器は冗長化されていること。
-  - zone: core
+  # --- コア / データセンターのバックボーンは必ず冗長化 ---
+  - name: core-must-be-redundant
+    zone: core
+    severity: error
+
+  - name: dc-core-must-be-redundant
+    zone: dc-core
+    severity: error
+
+  - name: dc-fabric-must-be-redundant
+    zone: dc-fabric
+    severity: warning
+
+  # --- インターネット境界（WAN エッジ）は冗長化（回線・機器の二重化）---
+  - name: wan-edge-must-be-redundant
+    zone: wan-edge
+    severity: warning
+
+  # --- セキュリティ境界（ファイアウォール）は冗長化（HA ペア）---
+  - name: firewall-must-be-redundant
+    zone: security
+    severity: warning
+
+  - name: firewall-type-must-be-redundant
+    type: firewall
+    severity: warning

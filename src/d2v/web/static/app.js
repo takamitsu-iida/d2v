@@ -49,6 +49,18 @@ async function loadMeta() {
         vsel.appendChild(opt);
       }
     }
+    // diff タブの before/after サンプル一覧
+    for (const id of ["diff-before-example", "diff-after-example"]) {
+      const dsel = document.getElementById(id);
+      if (!dsel) continue;
+      dsel.innerHTML = "";
+      for (const name of META.examples) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        dsel.appendChild(opt);
+      }
+    }
     // 既定値を反映
     const d = META.defaults;
     setVal("p-split-threshold", d.split_threshold);
@@ -872,6 +884,155 @@ function renderValidateError(msg) {
 }
 
 
+// ══════════════════════════════════════════════════════════════════
+// diff（意味的 diff）
+// ══════════════════════════════════════════════════════════════════
+
+function initDiff() {
+  // before/after の入力ソース切替
+  ["before", "after"].forEach((side) => {
+    document.querySelectorAll(`input[name="diff-${side}-source"]`).forEach((r) =>
+      r.addEventListener("change", () => {
+        const src = document.querySelector(`input[name="diff-${side}-source"]:checked`).value;
+        document.querySelectorAll(`.diff-src-block[data-side="${side}"]`).forEach((b) => {
+          b.hidden = b.dataset.src !== src;
+        });
+      })
+    );
+  });
+  // 詳細タブ（変更点 / 差分図）切替
+  document.querySelectorAll(".ddtab").forEach((t) =>
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".ddtab").forEach((x) => x.classList.toggle("active", x === t));
+      document.getElementById("diff-changes").hidden = t.dataset.dd !== "changes";
+      document.getElementById("diff-image-wrap").hidden = t.dataset.dd !== "image";
+    })
+  );
+  document.getElementById("diff-form").addEventListener("submit", submitDiff);
+}
+
+function _diffSide(side) {
+  const source = document.querySelector(`input[name="diff-${side}-source"]:checked`).value;
+  if (source === "example") {
+    return { source: "example", example: document.getElementById(`diff-${side}-example`).value };
+  }
+  return { source: "text", yaml_text: document.getElementById(`diff-${side}-text`).value };
+}
+
+async function submitDiff(e) {
+  e.preventDefault();
+  const btn = document.getElementById("diff-run-btn");
+  const payload = {
+    before: _diffSide("before"),
+    after: _diffSide("after"),
+    summarize: document.getElementById("diff-summarize").checked,
+    format: document.getElementById("diff-format").value,
+    image: true,
+  };
+  btn.disabled = true;
+  btn.textContent = "比較中…";
+  try {
+    const res = await fetch("/api/diff", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    renderDiff(data);
+  } catch (err) {
+    renderDiffError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ 差分を比較";
+  }
+}
+
+function _diffList(title, items, sign, cls) {
+  if (!items || !items.length) return "";
+  const lis = items.map((x) => `<li class="${cls}">${sign} ${escapeHtml(x)}</li>`).join("");
+  return `<h4>${escapeHtml(title)}</h4><ul class="diff-list">${lis}</ul>`;
+}
+
+function renderDiff(data) {
+  document.getElementById("diff-idle").hidden = true;
+  document.getElementById("diff-result-wrap").hidden = false;
+
+  const d = data.diff || {};
+  const badge = document.getElementById("diff-summary-badge");
+  if (data.is_empty) {
+    badge.textContent = "変化なし";
+    badge.className = "badge ok";
+  } else {
+    badge.textContent =
+      `+ノード ${(d.nodes_added || []).length} / -ノード ${(d.nodes_removed || []).length} / ` +
+      `~ノード ${(d.nodes_changed || []).length} / +エッジ ${(d.edges_added || []).length} / -エッジ ${(d.edges_removed || []).length}`;
+    badge.className = "badge";
+  }
+
+  const errBox = document.getElementById("diff-summary-error");
+  errBox.hidden = !data.summary_error;
+  if (data.summary_error) errBox.textContent = data.summary_error;
+
+  const nl = document.getElementById("diff-nl-summary");
+  if (d.summary) {
+    nl.hidden = false;
+    nl.textContent = d.summary;
+  } else {
+    nl.hidden = true;
+  }
+
+  const changed = (d.nodes_changed || []).map((nc) => {
+    const fields = (nc.changes || [])
+      .map((c) => `${escapeHtml(c.field)}: ${escapeHtml(String(c.before))} → ${escapeHtml(String(c.after))}`)
+      .join("、");
+    return `<li class="chg">~ ${escapeHtml(nc.device_id)}（${fields}）</li>`;
+  }).join("");
+
+  const changesEl = document.getElementById("diff-changes");
+  if (data.is_empty) {
+    changesEl.innerHTML = `<p class="dim">構造上の変化はありません。</p>`;
+  } else {
+    changesEl.innerHTML =
+      _diffList("ノード追加", d.nodes_added, "+", "add") +
+      _diffList("ノード削除", d.nodes_removed, "-", "del") +
+      (changed ? `<h4>ノード変更</h4><ul class="diff-list">${changed}</ul>` : "") +
+      _diffList("エッジ追加", d.edges_added, "+", "add") +
+      _diffList("エッジ削除", d.edges_removed, "-", "del") +
+      _diffList("ゾーン追加", d.zones_added, "+", "add") +
+      _diffList("ゾーン削除", d.zones_removed, "-", "del") +
+      _diffList("サブネット追加", d.subnets_added, "+", "add") +
+      _diffList("サブネット削除", d.subnets_removed, "-", "del");
+  }
+
+  const imgWrap = document.getElementById("diff-image-wrap");
+  if (data.image_token) {
+    const url = `/api/diff/image/${data.image_token}`;
+    document.getElementById("diff-image").src = url;
+    document.getElementById("diff-image-dl").href = url;
+    imgWrap.dataset.available = "1";
+  } else {
+    document.getElementById("diff-image").removeAttribute("src");
+    imgWrap.dataset.available = "0";
+  }
+  // 既定は「変更点」タブを表示
+  document.querySelectorAll(".ddtab").forEach((x) => x.classList.toggle("active", x.dataset.dd === "changes"));
+  document.getElementById("diff-changes").hidden = false;
+  imgWrap.hidden = true;
+}
+
+function renderDiffError(msg) {
+  document.getElementById("diff-idle").hidden = true;
+  document.getElementById("diff-result-wrap").hidden = false;
+  document.getElementById("diff-summary-badge").textContent = "エラー";
+  document.getElementById("diff-summary-badge").className = "badge ng";
+  document.getElementById("diff-nl-summary").hidden = true;
+  document.getElementById("diff-summary-error").hidden = true;
+  document.getElementById("diff-changes").innerHTML = `<p class="sev-error">${escapeHtml(msg)}</p>`;
+  document.getElementById("diff-image-wrap").hidden = true;
+}
+
+
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initSourceToggle();
@@ -883,6 +1044,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initShare();
   initV2dToD2v();
   initValidate();
+  initDiff();
   loadMeta().then(applyQueryParams);
   document.getElementById("d2v-form").addEventListener("submit", submitJob);
   document.getElementById("preview-btn").addEventListener("click", previewInput);

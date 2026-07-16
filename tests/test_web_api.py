@@ -282,3 +282,95 @@ def test_validate_example_traversal_blocked():
         "source": "example", "example": "../pyproject.toml",
     })
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 意味的 diff API（/api/diff）
+# ---------------------------------------------------------------------------
+
+_BEFORE_YAML = (
+    "network-model:\n"
+    "  physical-layer:\n"
+    "    device:\n"
+    "      - device-id: r1\n"
+    "        zone: core\n"
+    "      - device-id: r2\n"
+    "        zone: core\n"
+    "    physical-connection:\n"
+    "      - connection-id: c1\n"
+    "        endpoint:\n"
+    "          - device-id: r1\n"
+    "            interface-id: g0\n"
+    "          - device-id: r2\n"
+    "            interface-id: g0\n"
+)
+
+_AFTER_YAML = (
+    "network-model:\n"
+    "  physical-layer:\n"
+    "    device:\n"
+    "      - device-id: r1\n"
+    "        zone: core\n"
+    "      - device-id: r3\n"
+    "        zone: edge\n"
+    "    physical-connection:\n"
+    "      - connection-id: c2\n"
+    "        endpoint:\n"
+    "          - device-id: r1\n"
+    "            interface-id: g0\n"
+    "          - device-id: r3\n"
+    "            interface-id: g0\n"
+)
+
+
+def test_diff_text_sources():
+    r = client.post("/api/diff", json={
+        "before": {"source": "text", "yaml_text": _BEFORE_YAML},
+        "after": {"source": "text", "yaml_text": _AFTER_YAML},
+        "image": False,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["is_empty"] is False
+    assert data["diff"]["nodes_added"] == ["r3"]
+    assert data["diff"]["nodes_removed"] == ["r2"]
+
+
+def test_diff_identical_is_empty():
+    r = client.post("/api/diff", json={
+        "before": {"source": "text", "yaml_text": _BEFORE_YAML},
+        "after": {"source": "text", "yaml_text": _BEFORE_YAML},
+        "image": False,
+    })
+    data = r.json()
+    assert data["is_empty"] is True
+    assert data["image_token"] is None
+
+
+def test_diff_generates_image_and_serves_it():
+    r = client.post("/api/diff", json={
+        "before": {"source": "text", "yaml_text": _BEFORE_YAML},
+        "after": {"source": "text", "yaml_text": _AFTER_YAML},
+        "image": True,
+    })
+    data = r.json()
+    token = data["image_token"]
+    if token is None:
+        import pytest
+        pytest.skip("Graphviz 未インストールで画像が生成されなかった")
+    img = client.get(f"/api/diff/image/{token}")
+    assert img.status_code == 200
+    assert img.headers["content-type"].startswith("image/")
+
+
+def test_diff_image_unknown_token_404():
+    assert client.get("/api/diff/image/deadbeef").status_code == 404
+
+
+def test_diff_bad_yaml_returns_400():
+    r = client.post("/api/diff", json={
+        "before": {"source": "text", "yaml_text": "nope: true\n"},
+        "after": {"source": "text", "yaml_text": _AFTER_YAML},
+        "image": False,
+    })
+    assert r.status_code == 400

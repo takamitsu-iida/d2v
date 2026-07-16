@@ -168,22 +168,13 @@ class ValidateRequest(BaseModel):
     strict: bool = False
 
 
-@app.post("/api/validate")
-def validate_topology(req: ValidateRequest) -> dict:
-    """トポロジ YAML を同期的にセマンティック検証し、結果を返す。
-
-    検証は決定論的で高速なため（LLM 不要）、ジョブ化せず即時に結果を返す。
-    ``explain=True`` のときのみ LLM で理由・修正案を付与する（失敗しても検証結果は返す）。
-    """
+def _load_model_from_text(text: str):
+    """YAML 本文を一時ファイル経由でパースし TopologyModel を返す（失敗は 400）。"""
     import tempfile
 
-    from d2v import validator
     from d2v.errors import D2VError
     from d2v.parser import load_model
 
-    text = _read_yaml_source(req.source, req.example, req.yaml_text)
-
-    # load_model は Path を要求するため一時ファイルへ書き出してパースする。
     tmp: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -192,12 +183,25 @@ def validate_topology(req: ValidateRequest) -> dict:
             f.write(text)
             tmp = Path(f.name)
         try:
-            model = load_model(tmp)
+            return load_model(tmp)
         except D2VError as e:
             raise HTTPException(400, str(e))
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
+
+
+@app.post("/api/validate")
+def validate_topology(req: ValidateRequest) -> dict:
+    """トポロジ YAML を同期的にセマンティック検証し、結果を返す。
+
+    検証は決定論的で高速なため（LLM 不要）、ジョブ化せず即時に結果を返す。
+    ``explain=True`` のときのみ LLM で理由・修正案を付与する（失敗しても検証結果は返す）。
+    """
+    from d2v import validator
+
+    text = _read_yaml_source(req.source, req.example, req.yaml_text)
+    model = _load_model_from_text(text)
 
     report = validator.validate(model)
 
@@ -216,10 +220,97 @@ def validate_topology(req: ValidateRequest) -> dict:
         "explain_error": explain_error,
     }
 
+
+# ---------------------------------------------------------------------------
+# 意味的 diff API
+# ---------------------------------------------------------------------------
+
+# 生成した差分図を token で引けるようにする（プロセス内・ローカルツール想定）
+_DIFF_IMAGES: dict[str, Path] = {}
+
+
+class DiffSide(BaseModel):
+    """diff の一方（変更前 / 変更後）の入力。"""
+
+    source: str = Field("example", description="'example' | 'text'")
+    example: str | None = None
+    yaml_text: str | None = None
+
+
+class DiffRequest(BaseModel):
+    """意味的 diff リクエスト。"""
+
+    before: DiffSide
+    after: DiffSide
+    summarize: bool = False
+    image: bool = True
+    format: str = "png"
+
+
+@app.post("/api/diff")
+def diff_topologies(req: DiffRequest) -> dict:
+    """2 つのトポロジ YAML の構造差分を算出し、差分図（任意）を生成する。"""
+    import uuid
+
+    from d2v import diff as diff_mod
+
+    if req.format not in ("png", "svg"):
+        raise HTTPException(400, "format は png または svg を指定してください。")
+
+    before_text = _read_yaml_source(
+        req.before.source, req.before.example, req.before.yaml_text
+    )
+    after_text = _read_yaml_source(
+        req.after.source, req.after.example, req.after.yaml_text
+    )
+    before_model = _load_model_from_text(before_text)
+    after_model = _load_model_from_text(after_text)
+
+    topo_diff = diff_mod.compare(before_model, after_model)
+
+    summary_error: str | None = None
+    if req.summarize and not topo_diff.is_empty():
+        try:
+            topo_diff = diff_mod.summarize(topo_diff)
+        except (SystemExit, Exception) as e:  # noqa: BLE001 - 差分は必ず返す
+            summary_error = f"要約の生成に失敗しました: {e}"
+
+    image_token: str | None = None
+    if req.image and not topo_diff.is_empty():
+        image_token = uuid.uuid4().hex
+        out_dir = _ROOT / "output" / "webui" / "diff" / image_token
+        try:
+            img = diff_mod.render_diff_diagram(
+                before_model, after_model, topo_diff, out_dir,
+                stem="diff", fmt=req.format,
+            )
+            _DIFF_IMAGES[image_token] = img
+        except Exception:  # noqa: BLE001 - 図が作れなくても差分は返す
+            image_token = None
+
+    return {
+        "diff": topo_diff.model_dump(),
+        "is_empty": topo_diff.is_empty(),
+        "image_token": image_token,
+        "format": req.format,
+        "summary_error": summary_error,
+    }
+
+
+@app.get("/api/diff/image/{token}")
+def get_diff_image(token: str):
+    """diff で生成した差分図を token で返す。"""
+    path = _DIFF_IMAGES.get(token)
+    if path is None or not path.exists():
+        raise HTTPException(404, "差分図が見つかりません。")
+    return FileResponse(path)
+
+
 @app.get("/api/jobs")
 def list_jobs() -> dict:
     """全ジョブの要約を新しい順で返す（履歴一覧用）。"""
     return {"jobs": jobs.registry.list_jobs()}
+
 
 
 @app.get("/api/jobs/{job_id}")

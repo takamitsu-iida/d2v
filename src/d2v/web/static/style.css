@@ -412,3 +412,22 @@ button.secondary {
 .val-detail.sev-warning { border-left-color: #e3b341; }
 .val-detail.sev-info { border-left-color: #4aa3df; }
 .val-detail-head { font-weight: 600; margin-bottom: 4px; }
+
+/* ── diff タブ ── */
+.diff-list { list-style: none; padding-left: 4px; margin: 4px 0 12px; }
+.diff-list li { font-family: ui-monospace, monospace; font-size: 13px; padding: 2px 0; }
+.diff-list li.add { color: #137333; }
+.diff-list li.del { color: #C5221F; }
+.diff-list li.chg { color: #B06000; }
+.nl-summary {
+  white-space: pre-wrap;
+  background: var(--panel-2);
+  border-left: 3px solid var(--accent);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 8px 0;
+  font-size: 14px;
+}
+#diff-image { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.ddtab { appearance: none; border: 1px solid var(--border); background: var(--panel); color: var(--muted); padding: 6px 14px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px; }
+.ddtab.active { background: var(--panel-2); color: var(--text); }

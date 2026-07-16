@@ -5,6 +5,7 @@
   （なし）        d2v: YAML → 構成図（従来どおり `python main.py -i topology.yaml`）
   v2d            vision-to-diagram: 構成図画像 → iida-network-model YAML
   validate       セマンティック検証（design lint）: 設計上の問題を検出
+  diff           2 つのトポロジの意味的 diff ＋ 差分図
 """
 
 from __future__ import annotations
@@ -38,8 +39,10 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "validate":
         run_validate(sys.argv[2:])
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "diff":
+        run_diff(sys.argv[2:])
+        return
     run_d2v()
-
 
 def run_d2v() -> None:
     ap = argparse.ArgumentParser(
@@ -524,6 +527,84 @@ def run_validate(argv: list[str]) -> None:
         console.print(validator.render_report(report))
 
     sys.exit(0 if report.passed(strict=args.strict) else 1)
+
+
+# ---------------------------------------------------------------------------
+# diff サブコマンド（意味的 diff + 差分図）
+# ---------------------------------------------------------------------------
+
+
+def run_diff(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="d2v diff",
+        description="2 つのトポロジ YAML の構造差分を検出し、差分図を生成します。",
+    )
+    ap.add_argument("--before", "-b", required=True, type=Path, metavar="BEFORE_YAML",
+                    help="変更前のトポロジ YAML")
+    ap.add_argument("--after", "-a", required=True, type=Path, metavar="AFTER_YAML",
+                    help="変更後のトポロジ YAML")
+    ap.add_argument("--output-dir", "-o", type=Path, default=Path("output/diff"),
+                    metavar="DIR", help="差分図の出力先（デフォルト: output/diff）")
+    ap.add_argument("--summarize", action="store_true",
+                    help="差分を LLM で自然言語要約する（LLM を使用）")
+    ap.add_argument("--format", "-f", choices=["png", "svg"], default="png",
+                    help="差分図の出力フォーマット（デフォルト: png）")
+    ap.add_argument("--no-image", action="store_true",
+                    help="差分図を生成せず、構造差分のみ出力する")
+    ap.add_argument("--json", action="store_true",
+                    help="構造差分を JSON で出力する")
+    ap.add_argument("--exit-zero", action="store_true",
+                    help="差分があっても終了コード 0 を返す（既定は差分ありで 1）")
+    args = ap.parse_args(argv)
+
+    from d2v import diff as diff_mod
+    from d2v.parser import load_model
+
+    try:
+        before = load_model(args.before)
+        after = load_model(args.after)
+    except D2VError as e:
+        console.print(f"\n[bold red]✗ {e}[/bold red]\n")
+        sys.exit(1)
+
+    topo_diff = diff_mod.compare(before, after)
+
+    if args.summarize and not topo_diff.is_empty():
+        try:
+            topo_diff = diff_mod.summarize(topo_diff)
+        except D2VError as e:
+            console.print(f"[yellow]要約の生成に失敗しました（差分のみ表示）: {e}[/yellow]")
+
+    if args.json:
+        console.print_json(topo_diff.model_dump_json())
+    else:
+        console.print(Panel(
+            f"変更前 : [bold cyan]{args.before}[/bold cyan]\n"
+            f"変更後 : [bold cyan]{args.after}[/bold cyan]",
+            title="[bold blue]d2v  トポロジ差分（意味的 diff）[/bold blue]",
+            expand=False,
+        ))
+        console.print(diff_mod.render_diff(topo_diff))
+
+    # 差分図の生成
+    if not args.no_image and not topo_diff.is_empty():
+        try:
+            image = diff_mod.render_diff_diagram(
+                before, after, topo_diff, args.output_dir,
+                stem=f"{args.before.stem}__{args.after.stem}", fmt=args.format,
+            )
+            console.print(Panel(
+                f"差分図 : [bold]{image}[/bold]",
+                title="[bold green]✓ 差分図を生成しました[/bold green]",
+                expand=False,
+            ))
+        except D2VError as e:
+            console.print(f"[yellow]差分図の生成に失敗しました: {e}[/yellow]")
+
+    # 終了コード: 差分ありで 1（CI の変更検知用）。--exit-zero で常に 0。
+    if args.exit_zero or topo_diff.is_empty():
+        sys.exit(0)
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
