@@ -306,6 +306,166 @@ def get_diff_image(token: str):
     return FileResponse(path)
 
 
+# ---------------------------------------------------------------------------
+# focus ライブプレビュー API（edit-assist）
+#   エディタのカーソル位置に追従して、注目ノード周辺の構成図を即時返す。
+#   決定論経路（LLM 不使用）のため同期で完結し、ジョブ化しない。
+# ---------------------------------------------------------------------------
+
+
+class FocusResolveRequest(BaseModel):
+    """カーソル行 → 注目ノード解決リクエスト。"""
+
+    source: str = Field("example", description="'example' | 'text'")
+    example: str | None = None
+    yaml_text: str | None = None
+    line: int = Field(..., ge=1, description="カーソル行（1 始まり）")
+
+
+@app.post("/api/focus/resolve")
+def focus_resolve(req: FocusResolveRequest) -> dict:
+    """YAML 本文とカーソル行から、注目 device-id を解決して返す。
+
+    device ブロック内なら 1 台、physical-connection ブロック内なら両端 2 台。
+    どこにも該当しなければ直前の最も近いブロックへフォールバックする。
+    """
+    from d2v import edit_assist
+
+    text = _read_yaml_source(req.source, req.example, req.yaml_text)
+    res = edit_assist.resolve_focus(text, req.line)
+    return {
+        "focus": res.focus_ids,
+        "context": res.context,
+        "device_lines": res.device_lines,
+    }
+
+
+class FocusPreviewRequest(BaseModel):
+    """focus ライブプレビュー生成リクエスト。
+
+    ``focus`` を明示した場合はそれを優先する。未指定かつ ``line`` があれば
+    カーソル行から注目ノードを解決する。
+    """
+
+    source: str = Field("example", description="'example' | 'text'")
+    example: str | None = None
+    yaml_text: str | None = None
+    focus: list[str] | None = None
+    line: int | None = Field(None, ge=1, description="カーソル行（1 始まり）")
+    hops: int = Field(1, ge=1, le=5)
+
+
+@app.post("/api/focus/preview")
+def focus_preview(req: FocusPreviewRequest) -> dict:
+    """注目ノード周辺（hops ホップ以内）の集中図 SVG を同期生成して返す。
+
+    レンダリングは決定論的（LLM 不使用）なので即時に完結する。
+    ライブ編集では不正 YAML・未解決が頻繁に起きるため、注目ノードが決まらない
+    ／存在しない場合も 200 で構造化情報を返す（呼び出し側が直前の図を保持できる）。
+    """
+    import tempfile
+
+    from d2v import edit_assist, partitioner
+
+    text = _read_yaml_source(req.source, req.example, req.yaml_text)
+    model = _load_model_from_text(text)
+
+    # 注目ノードの決定: focus 明示 > line 解決
+    context = "explicit"
+    device_lines: dict[str, int] = {}
+    focus_ids = list(req.focus) if req.focus else []
+    if not focus_ids and req.line is not None:
+        res = edit_assist.resolve_focus(text, req.line)
+        focus_ids = res.focus_ids
+        context = res.context
+        device_lines = res.device_lines
+    if not device_lines:
+        # 明示 focus のときも双方向ジャンプ用に定義行を返す
+        _, device_lines = edit_assist._parse_spans(text)
+
+    base = {
+        "svg": None,
+        "focus": focus_ids,
+        "context": context,
+        "hops": req.hops,
+        "device_lines": device_lines,
+        "not_found": [],
+        "message": None,
+    }
+
+    if not focus_ids:
+        base["message"] = "注目ノードを特定できませんでした。"
+        return base
+
+    missing = [f for f in focus_ids if f not in model.device_map]
+    if missing:
+        base["not_found"] = missing
+        base["message"] = f"存在しない device-id: {', '.join(missing)}"
+        return base
+
+    dot_code = partitioner.build_focus_dot(model, focus_ids, req.hops)
+    if dot_code is None:
+        base["message"] = "集中図を生成できませんでした。"
+        return base
+
+    from d2v import renderer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        img = renderer.render(dot_code, Path(tmp), stem="focus", fmt="svg")
+        base["svg"] = img.read_text(encoding="utf-8")
+    return base
+
+
+class LintRequest(BaseModel):
+    """エディタ diagnostics 用の design lint リクエスト。"""
+
+    source: str = Field("example", description="'example' | 'text'")
+    example: str | None = None
+    yaml_text: str | None = None
+    strict: bool = False
+
+
+@app.post("/api/lint")
+def lint_topology(req: LintRequest) -> dict:
+    """design lint（セマンティック検証）を行い、各 issue を行番号付きで返す。
+
+    エディタで波線（diagnostics）を出すため、issue の ``targets``
+    （device-id / connection-id / subnet-id）を YAML 上の行へ解決して付与する。
+    行を特定できない issue は ``line=null`` を返す（呼び出し側で先頭行に集約）。
+    """
+    from d2v import edit_assist, validator
+
+    text = _read_yaml_source(req.source, req.example, req.yaml_text)
+    model = _load_model_from_text(text)
+
+    report = validator.validate(model)
+    sym = edit_assist.symbol_lines(text)
+
+    issues: list[dict] = []
+    for iss in report.issues:
+        line: int | None = None
+        for t in iss.targets:
+            if t in sym:
+                line = sym[t]
+                break
+        issues.append(
+            {
+                "rule": iss.rule,
+                "severity": iss.severity,
+                "message": iss.message,
+                "targets": iss.targets,
+                "line": line,
+            }
+        )
+
+    return {
+        "ok": report.ok,
+        "passed": report.passed(strict=req.strict),
+        "counts": report.counts,
+        "issues": issues,
+    }
+
+
 @app.get("/api/jobs")
 def list_jobs() -> dict:
     """全ジョブの要約を新しい順で返す（履歴一覧用）。"""

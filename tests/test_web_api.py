@@ -374,3 +374,151 @@ def test_diff_bad_yaml_returns_400():
         "image": False,
     })
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# focus ライブプレビュー API（edit-assist）
+# ---------------------------------------------------------------------------
+
+
+def test_focus_resolve_device_and_connection():
+    text = Path("examples/sample_topology_small.yaml").read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    # device ブロック内のカーソル → その 1 台
+    dev_line = next(
+        i + 1 for i, ln in enumerate(lines) if 'device-id: "fw-01"' in ln
+    )
+    r = client.post(
+        "/api/focus/resolve",
+        json={"source": "text", "yaml_text": text, "line": dev_line + 2},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["focus"] == ["fw-01"]
+    assert data["context"] == "device"
+    # device_lines に定義行が入り、双方向ジャンプに使える
+    assert data["device_lines"]["fw-01"] >= 1
+
+    # physical-connection ブロック内のカーソル → 両端 2 台
+    conn_line = next(
+        i + 1 for i, ln in enumerate(lines)
+        if "router-01__fw-01" in ln
+    )
+    r = client.post(
+        "/api/focus/resolve",
+        json={"source": "text", "yaml_text": text, "line": conn_line + 1},
+    )
+    data = r.json()
+    assert data["context"] == "connection"
+    assert set(data["focus"]) == {"router-01", "fw-01"}
+
+
+def test_focus_preview_by_line_returns_svg():
+    text = Path("examples/sample_topology_small.yaml").read_text(encoding="utf-8")
+    line = next(
+        i + 1 for i, ln in enumerate(text.splitlines())
+        if 'device-id: "fw-01"' in ln
+    )
+    r = client.post(
+        "/api/focus/preview",
+        json={"source": "text", "yaml_text": text, "line": line, "hops": 1},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["focus"] == ["fw-01"]
+    if data["svg"] is None:
+        import pytest
+        pytest.skip("Graphviz 未インストールで SVG が生成されなかった")
+    assert "<svg" in data["svg"]
+    # 双方向ジャンプ用の id が SVG に埋まっている
+    assert "device:fw" in data["svg"]
+
+
+def test_focus_preview_explicit_focus():
+    r = client.post(
+        "/api/focus/preview",
+        json={"source": "example", "example": "sample_topology_small.yaml",
+              "focus": ["core-sw-01"], "hops": 2},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["focus"] == ["core-sw-01"]
+    assert data["context"] == "explicit"
+
+
+def test_focus_preview_unknown_device_is_200_with_not_found():
+    r = client.post(
+        "/api/focus/preview",
+        json={"source": "example", "example": "sample_topology_small.yaml",
+              "focus": ["no-such-node"]},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["svg"] is None
+    assert data["not_found"] == ["no-such-node"]
+
+
+def test_focus_preview_no_focus_is_200_with_message():
+    # 注目ノードが特定できない（line も focus も無い）場合も 200
+    r = client.post(
+        "/api/focus/preview",
+        json={"source": "example", "example": "sample_topology_small.yaml"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["svg"] is None
+    assert data["focus"] == []
+    assert data["message"]
+
+
+def test_focus_preview_bad_yaml_returns_400():
+    r = client.post(
+        "/api/focus/preview",
+        json={"source": "text", "yaml_text": "nope: true\n", "focus": ["x"]},
+    )
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# design lint diagnostics API（edit-assist）
+# ---------------------------------------------------------------------------
+
+
+def test_lint_returns_issues_with_lines():
+    # web-server が単一リンク等の指摘が出るサンプル。issue が行番号付きで返る。
+    r = client.post(
+        "/api/lint",
+        json={"source": "example", "example": "sample_topology_small.yaml"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "counts" in data and "issues" in data
+    for iss in data["issues"]:
+        assert "rule" in iss and "severity" in iss and "message" in iss
+        # line は int か null。int の場合は 1 以上。
+        assert iss["line"] is None or iss["line"] >= 1
+
+
+def test_lint_maps_target_to_device_line():
+    # 宙ぶらりん接続を作って、issue が該当 device/connection の行を指すことを確認
+    text = Path("examples/sample_topology_small.yaml").read_text(encoding="utf-8")
+    # 存在しない device を参照する接続を追加（dangling）
+    text += (
+        "\n      - connection-id: \"broken-link\"\n"
+        "        endpoint:\n"
+        "          - device-id: \"ghost-01\"\n"
+        "            interface-id: \"eth9\"\n"
+        "          - device-id: \"pc-01\"\n"
+        "            interface-id: \"eth9\"\n"
+    )
+    r = client.post("/api/lint", json={"source": "text", "yaml_text": text})
+    assert r.status_code == 200
+    data = r.json()
+    # 何らかの error/warning が検出される
+    assert data["counts"].get("error", 0) + data["counts"].get("warning", 0) >= 1
+
+
+def test_lint_bad_yaml_returns_400():
+    r = client.post("/api/lint", json={"source": "text", "yaml_text": "nope: true\n"})
+    assert r.status_code == 400

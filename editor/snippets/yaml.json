@@ -1,0 +1,41 @@
+{
+  "d2v device": {
+    "prefix": "d2v-device",
+    "description": "iida-network-model: device（ノード）1 台の定義",
+    "body": [
+      "- device-id: \"${1:device-id}\"",
+      "  device-name: \"${2:Display Name}\"",
+      "  device-type: ${3|router,switch,firewall,server,host,load-balancer|}",
+      "  zone: ${4:zone-name}",
+      "  loopback: \"${5:10.0.0.1/32}\"",
+      "  interface:",
+      "    - interface-id: \"${6:GigabitEthernet0/0}\"",
+      "      description: \"${7:link description}\"",
+      "      ip-address: \"${8:10.0.0.0/30}\"",
+      ""
+    ]
+  },
+  "d2v interface": {
+    "prefix": "d2v-interface",
+    "description": "iida-network-model: interface 1 本の定義",
+    "body": [
+      "- interface-id: \"${1:GigabitEthernet0/0}\"",
+      "  description: \"${2:link description}\"",
+      "  ip-address: \"${3:10.0.0.0/30}\"",
+      ""
+    ]
+  },
+  "d2v connection": {
+    "prefix": "d2v-connection",
+    "description": "iida-network-model: physical-connection（両端リンク）1 本の定義",
+    "body": [
+      "- connection-id: \"${1:a__b}\"",
+      "  endpoint:",
+      "    - device-id: \"${2:device-a}\"",
+      "      interface-id: \"${3:GigabitEthernet0/0}\"",
+      "    - device-id: \"${4:device-b}\"",
+      "      interface-id: \"${5:GigabitEthernet0/1}\"",
+      ""
+    ]
+  }
+}

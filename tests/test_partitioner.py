@@ -78,3 +78,89 @@ def test_empty_boundary_yields_empty_plan():
     assert bp.aggregated_zones_ordered == []
     assert bp.indiv_boundary == []
     assert bp.agg_boundary == {}
+
+
+# ---------------------------------------------------------------------------
+# 決定論 focus 図（build_focus_dot / _focus_data）
+# ---------------------------------------------------------------------------
+
+
+def _linear_model() -> TopologyModel:
+    """a - b - c - d の一直線トポロジ（各ノードは別 device-type/zone）。"""
+    devices = [
+        {"device-id": "a", "device-name": "Node A", "device-type": "router", "zone": "z1"},
+        {"device-id": "b", "device-name": "Node B", "device-type": "firewall", "zone": "z1"},
+        {"device-id": "c", "device-name": "Node C", "device-type": "switch", "zone": "z2"},
+        {"device-id": "d", "device-name": "Node D", "device-type": "server", "zone": "z2"},
+    ]
+    connections = [_conn("a", "b"), _conn("b", "c"), _conn("c", "d")]
+    connections[0]["connection-id"] = "a__b"
+    connections[1]["connection-id"] = "b__c"
+    connections[2]["connection-id"] = "c__d"
+    return TopologyModel(
+        devices=devices,
+        connections=connections,
+        subnets=[],
+        device_map={d["device-id"]: d for d in devices},
+    )
+
+
+def test_build_focus_dot_is_deterministic():
+    model = _linear_model()
+    dot1 = partitioner.build_focus_dot(model, "b", hops=1)
+    dot2 = partitioner.build_focus_dot(model, ["b"], hops=1)
+    assert dot1 is not None
+    # 同一入力（str/list を正規化）→ 完全一致する DOT（冪等）
+    assert dot1 == dot2
+    assert dot1.startswith("digraph focus {")
+    assert dot1.rstrip().endswith("}")
+
+
+def test_build_focus_dot_returns_none_for_missing_device():
+    model = _linear_model()
+    assert partitioner.build_focus_dot(model, "nonexistent", hops=1) is None
+    # 一部でも存在しなければ None
+    assert partitioner.build_focus_dot(model, ["b", "nope"], hops=1) is None
+
+
+def test_build_focus_dot_highlights_focus_and_scope():
+    model = _linear_model()
+    # b を中心に 1 ホップ → a, b, c を含み d は含まない
+    dot = partitioner.build_focus_dot(model, "b", hops=1)
+    assert dot is not None
+    assert '"a"' in dot and '"b"' in dot and '"c"' in dot
+    assert '"d"' not in dot
+    # 注目ノード b は強調（★注目）され、双方向ジャンプ用 id を持つ
+    assert "★注目・0 ホップ" in dot
+    assert 'id="device:b"' in dot
+    # c は境界ノード（この先に d が省略されている）
+    assert "この先 1 台省略" in dot
+
+
+def test_build_focus_dot_hop_labels_and_edges():
+    model = _linear_model()
+    dot = partitioner.build_focus_dot(model, "b", hops=1)
+    assert dot is not None
+    # a と c は 1 ホップ
+    assert "1 ホップ" in dot
+    # intra 接続のみ描画（a-b, b-c）。範囲外の c-d は出ない
+    assert '"a" -> "b"' in dot
+    assert '"b" -> "c"' in dot
+    assert 'tooltip="c__d"' not in dot
+    # zone はゆるく cluster 化される
+    assert "subgraph cluster_z" in dot
+
+
+def test_focus_data_shared_between_paths():
+    model = _linear_model()
+    data = partitioner._focus_data(model, "b", hops=1)
+    assert data is not None
+    assert data.focus_ids == ["b"]
+    assert data.included == {"a", "b", "c"}
+    assert data.dist["b"] == 0 and data.dist["a"] == 1 and data.dist["c"] == 1
+    # c は範囲外の d を隣接に持つため境界（省略 1 台）
+    assert data.truncated == {"c": 1}
+    # focus_plan も同じ構造データから生成され、None にならない
+    plan = partitioner.focus_plan(model, "b", hops=1)
+    assert plan is not None
+    assert "3 台" in plan.title

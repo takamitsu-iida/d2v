@@ -506,15 +506,29 @@ def _focus_text(
     return "\n".join(lines)
 
 
-def focus_plan(
-    model: TopologyModel, focus_ids: "str | list[str]", hops: int = 1
-) -> SubDiagram | None:
-    """注目ノード群から hops ホップ以内の集中図を返す。
+@dataclass
+class FocusData:
+    """注目ノード集中図の構造データ（すべて決定論的に算出される）。
 
-    複数の注目ノードを指定した場合、いずれかのノードから hops ホップ以内に
-    到達できるノードの和集合を 1 枚のサブグラフとして抽出する。
+    LLM 経路（``focus_plan`` → ``_focus_text``）と決定論経路
+    （``build_focus_dot``）の双方から共有され、二重実装を防ぐ。
+    """
+
+    focus_ids: list[str]           # 正規化済み注目ノード（重複除去・順序保持）
+    hops: int                      # 抽出した最大ホップ数
+    dist: "OrderedDict[str, int]"  # device-id → 最短ホップ数（注目ノードは 0）
+    included: set[str]             # dist に含まれる device-id 集合
+    intra: list[_YamlDict]         # 両端が included に含まれる物理接続
+    truncated: dict[str, int]      # 境界ノード device-id → 省略された隣接数
+
+
+def _focus_data(
+    model: TopologyModel, focus_ids: "str | list[str]", hops: int
+) -> "FocusData | None":
+    """focus 指定を検証し、集中図の構造データを算出する。
+
     指定した注目ノードのいずれかがトポロジに存在しない場合は None を返す
-    （呼び出し側でエラー表示）。
+    （呼び出し側でエラー表示）。``hops`` が 1 未満なら ValueError。
     """
     if isinstance(focus_ids, str):
         focus_ids = [focus_ids]
@@ -553,6 +567,32 @@ def focus_plan(
         if hidden:
             truncated[did] = len(hidden)
 
+    return FocusData(
+        focus_ids=focus_ids,
+        hops=hops,
+        dist=dist,
+        included=included,
+        intra=intra,
+        truncated=truncated,
+    )
+
+
+def focus_plan(
+    model: TopologyModel, focus_ids: "str | list[str]", hops: int = 1
+) -> SubDiagram | None:
+    """注目ノード群から hops ホップ以内の集中図を返す。
+
+    複数の注目ノードを指定した場合、いずれかのノードから hops ホップ以内に
+    到達できるノードの和集合を 1 枚のサブグラフとして抽出する。
+    指定した注目ノードのいずれかがトポロジに存在しない場合は None を返す
+    （呼び出し側でエラー表示）。
+    """
+    data = _focus_data(model, focus_ids, hops)
+    if data is None:
+        return None
+    focus_ids = data.focus_ids
+    dist = data.dist
+
     def _name(did: str) -> str:
         return model.device_map.get(did, {}).get("device-name", did)
 
@@ -568,8 +608,159 @@ def focus_plan(
     return SubDiagram(
         key=f"focus-{key_ids}-{hops}hop",
         title=title,
-        text=_focus_text(model, focus_ids, hops, dist, intra, truncated),
+        text=_focus_text(
+            model, focus_ids, hops, dist, data.intra, data.truncated
+        ),
     )
+
+
+# ---------------------------------------------------------------------------
+# 決定論 focus 図（build_focus_dot）: LLM を使わず DOT を直接生成する
+#   エディタのライブプレビュー用。即時・無料・冪等（同一入力→同一出力）。
+# ---------------------------------------------------------------------------
+
+# device-type → 絵文字アイコン（README・diff の配色規約に合わせる）
+_FOCUS_ICON: dict[str, str] = {
+    "router": "🌐",
+    "switch": "🔀",
+    "firewall": "🧱",
+    "server": "💻",
+    "host": "💻",
+    "load-balancer": "⚖️",
+}
+
+# 役割 → (fillcolor, color, penwidth)
+_FOCUS_STYLE_FOCUS = ("#D2E3FC", "#1A73E8", "2.4")   # ★注目ノード（強調）
+_FOCUS_STYLE_NORMAL = ("#F1F3F4", "#9AA0A6", "1")    # 通常ノード
+_FOCUS_STYLE_BOUNDARY = ("#F1F3F4", "#E37400", "1")  # 境界（この先に省略あり）
+
+
+def _dq(s: object) -> str:
+    """DOT 用にダブルクォートで囲む（内部のダブルクォートのみエスケープ）。"""
+    return '"' + str(s).replace('"', '\\"') + '"'
+
+
+def build_focus_dot(
+    model: TopologyModel,
+    focus_ids: "str | list[str]",
+    hops: int = 1,
+) -> str | None:
+    """注目ノード周辺（hops ホップ以内）の集中図を LLM を使わず決定論的に
+    Graphviz DOT へ変換する（エディタのライブプレビュー用）。
+
+    - 注目ノードは青で強調（★注目・0 ホップ）。
+    - 境界ノード（この先に省略された接続を持つ）は橙の破線枠で表す。
+    - 各ノードには ``id="device:<device-id>"`` を付与し、SVG 上のクリックから
+      YAML 定義行への双方向ジャンプを可能にする。
+    - zone があればゆるく cluster 化する。
+
+    指定した注目ノードのいずれかがトポロジに存在しない場合は None を返す。
+    同一入力に対して常に同一の DOT を返す（冪等）。
+    """
+    data = _focus_data(model, focus_ids, hops)
+    if data is None:
+        return None
+
+    focus_set = set(data.focus_ids)
+
+    # zone ごとにグルーピングする（dist の決定論的な初出順を維持）
+    by_zone: "OrderedDict[str, list[str]]" = OrderedDict()
+    for did in data.dist:
+        z = model.device_map.get(did, {}).get("zone") or ""
+        by_zone.setdefault(z, []).append(did)
+
+    lines: list[str] = [
+        "digraph focus {",
+        "    compound=true; newrank=true; rankdir=LR;",
+        '    graph [fontname="Helvetica,Arial,sans-serif"];',
+        '    node [fontname="Helvetica,Arial,sans-serif", fontsize=10, '
+        'shape=box, style="filled,rounded"];',
+        '    edge [fontname="Helvetica,Arial,sans-serif", fontsize=8, '
+        'color="#5F6368"];',
+    ]
+
+    def _emit_node(did: str, indent: str) -> None:
+        dev = model.device_map.get(did, {"device-id": did})
+        icon = _FOCUS_ICON.get(dev.get("device-type"), "📦")
+        name = dev.get("device-name", "")
+        hop = data.dist.get(did, 0)
+        is_focus = did in focus_set
+        if is_focus:
+            fill, color, pw = _FOCUS_STYLE_FOCUS
+            marker = "★注目・0 ホップ"
+            style = "filled,rounded"
+        elif did in data.truncated:
+            fill, color, pw = _FOCUS_STYLE_BOUNDARY
+            marker = f"{hop} ホップ・この先 {data.truncated[did]} 台省略"
+            style = "filled,rounded,dashed"
+        else:
+            fill, color, pw = _FOCUS_STYLE_NORMAL
+            marker = f"{hop} ホップ"
+            style = "filled,rounded"
+
+        label_parts = [f"{icon} {did}"]
+        if name and name != did:
+            label_parts.append(name)
+        label_parts.append(marker)
+        label = "\\n".join(label_parts)
+        tooltip = did + (f" / {name}" if name and name != did else "") + \
+            f" ・ {marker}"
+        lines.append(
+            f"{indent}{_dq(did)} [label={_dq(label)}, "
+            f'fillcolor="{fill}", color="{color}", penwidth={pw}, '
+            f'style="{style}", id={_dq("device:" + did)}, '
+            f"tooltip={_dq(tooltip)}];"
+        )
+
+    ci = 0
+    for zone, members in by_zone.items():
+        if zone:
+            lines.append(f"    subgraph cluster_z{ci} {{")
+            lines.append(
+                f"        label={_dq(zone)}; bgcolor=\"#F8F9FA\"; "
+                f'color="#5F6368"; fontcolor="#3C4043";'
+            )
+            for did in members:
+                _emit_node(did, "        ")
+            lines.append("    }")
+            ci += 1
+        else:
+            for did in members:
+                _emit_node(did, "    ")
+
+    # 物理接続（両端が抽出範囲内のものだけ）を決定論的な順序で描く
+    for conn in data.intra:
+        eps = conn.get("endpoint", [])
+        d0 = eps[0].get("device-id", "")
+        d1 = eps[1].get("device-id", "")
+        cid = conn.get("connection-id", f"{d0}__{d1}")
+        lines.append(f"    {_dq(d0)} -> {_dq(d1)} [tooltip={_dq(cid)}];")
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def render_focus_diagram(
+    model: TopologyModel,
+    focus_ids: "str | list[str]",
+    output_dir,
+    hops: int = 1,
+    stem: str = "focus",
+    fmt: str = "svg",
+):
+    """決定論 focus 図（LLM 不使用）を DOT 化・レンダリングして画像を保存する。
+
+    focus_ids のいずれかがトポロジに存在しない場合は None を返す。
+
+    Returns:
+        生成した画像ファイルの Path（focus 不在時は None）。
+    """
+    from d2v import renderer
+
+    dot_code = build_focus_dot(model, focus_ids, hops)
+    if dot_code is None:
+        return None
+    return renderer.render(dot_code, output_dir, stem=stem, fmt=fmt)
 
 
 # ---------------------------------------------------------------------------

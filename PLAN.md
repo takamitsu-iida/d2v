@@ -1535,4 +1535,189 @@ class TopologyDiff(BaseModel):
 - [x] `TopologyDiff` モデルと `compare()` を実装しテストを通す
 - [x] エッジの無向・ポート込み正規化キーを確定する
 - [x] `build_diff_dot()` で和集合グラフの色分け描画を成立させる
+
+---
+
+# 実装計画: エディタ連携ライブプレビュー（edit-assist / focus live preview）
+
+**目標**: 大規模化した `iida-network-model` YAML の編集を支援する。エディタで
+YAML を編集中、**カーソル位置のノード（device）を自動検出**し、その周辺
+（N ホップ以内）の構成図を横のパネルに**リアルタイム表示**する。
+編集のたびに再描画するため、レンダリングは **LLM 非依存の決定論経路**で行う。
+
+> 背景: YAML は規模が大きくなると行数が増えて全体像を見失いやすい。
+> 「いま編集しているノードとその周辺」を常に図で確認できれば、
+> 接続の張り忘れ・誤参照・孤立に気づきやすくなる。
+
+## コンセプト
+
+```
+VS Code エディタ (YAML)
+    │  ① カーソル移動 / 編集（debounce）
+    ▼
+拡張機能 (TypeScript)
+    │  ② カーソル行 → device-id を解決（YAML本文＋行番号）
+    │  ③ POST /api/focus/preview {yaml_text, focus:[device-id], hops}
+    ▼
+d2v serve (FastAPI)
+    │  ④ partitioner.focus_plan で N ホップ部分グラフ抽出
+    │  ⑤ build_focus_dot（★新規・決定論）で DOT 生成
+    │  ⑥ renderer.render で SVG 化（LLM 不使用）
+    ▼
+Webview パネル
+    ⑦ SVG 表示（ホップ数スライダー / ノードクリック→YAML行ジャンプ）
+```
+
+## 重要な設計判断
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| レンダリング経路 | **LLM 非依存の決定論 DOT ビルダーを新規追加**（`build_focus_dot`） | 既存の focus 経路は LLM 生成のため遅く・課金あり。編集追従には即時・無料・冪等が必須 |
+| 部分グラフ抽出 | 既存 `partitioner.focus_plan` / `hop_distances` を再利用 | 多点 BFS・境界省略ロジックが実装済み。二重実装しない |
+| DOT の書き味 | `diff.build_diff_dot` / `build_impact_dot` と同じ内製方式を踏襲 | 決定論・追加依存なし。device-type 絵文字・zone クラスタも既存規約に合わせる |
+| API 形態 | **同期**エンドポイント（ジョブ/SSE を使わない） | プレビューは短時間で完結。既存の非同期ジョブ基盤は重すぎる |
+| カーソル→device 解決 | サーバ側で YAML を解析し行→device-id をマップ | `yaml.compose` の行マーク（`start_mark`/`end_mark`）で解決。追加依存なし・拡張側は薄く保つ |
+| 双方向ジャンプ | DOT ノードに `id`/`tooltip` を埋め、SVG クリックで行番号へ | SVG は行番号メタを持てる。編集⇔図の往復を高速化 |
+
+## リスクと対策
+
+- **カーソルがノード定義の外**（`physical-connection` 内やトップ階層）→ 直近の
+  `device-id` を採用。接続内なら**両端 2 台を focus に**して文脈を出す。
+- **編集途中で YAML が不正**（パース不能）→ 直前の成功プレビューを保持し、
+  ステータスに「解析待ち」を出す（点滅・再描画の暴発を防ぐ）。
+- **大きな YAML の再解析コスト** → debounce（例 200–300ms）＋
+  本文ハッシュでキャッシュ。無変更のカーソル移動は再送しない。
+- **serve 未起動** → 拡張がヘルスチェックし、未起動なら起動導線を案内。
+
+---
+
+### Phase 0: 決定論 focus DOT ビルダー（コア・LLM 非依存）
+**目標**: `TopologyModel` と focus 指定から、LLM を使わず SVG まで生成できる。
+
+- [x] `partitioner.focus_plan` の戻り（`SubDiagram`＝included ノード / intra 接続 /
+      hop 距離 / 境界省略情報）から DOT を組む `build_focus_dot(model, focus_ids, hops)`
+      を新規追加（`diff.build_diff_dot` を参考に internal な DOT エミッタとして実装）。
+- [x] device-type ごとの絵文字アイコン（🌐🔀🔌🧱💻）・ホップ注記（★注目/ N ホップ）・
+      境界ノードの「この先 N 台省略」表現を反映。zone は cluster で緩く色分け。
+- [x] スター状で縦長になりやすい点への対策（`rankdir=LR` 既定＋近傍段組み）。
+- [x] 各ノードに `id="device:<device-id>"` と tooltip を付与（双方向ジャンプ用）。
+- [x] `renderer.render` で SVG 化して返すヘルパを用意（PNG も任意対応）。
+- [x] `tests/` に決定論性テスト（同一入力→同一 DOT、focus 不在→None、
+      境界省略の件数、0ホップ強調）。
+
+**完了の定義**: LLM を呼ばずに任意 focus の SVG を生成でき、`pytest` が緑。✅
+
+**実装（2026-07-16）**
+- `partitioner` に `FocusData` データクラスと `_focus_data()` を追加し、focus の構造
+  データ（focus_ids / dist / included / intra / truncated）を **LLM 経路（`focus_plan`）と
+  決定論経路（`build_focus_dot`）で共有**（二重実装を排除）。`focus_plan` は `_focus_data`
+  を使うようリファクタ（挙動不変）。
+- `build_focus_dot(model, focus_ids, hops)` を新規追加。注目ノード=青強調（★注目・0 ホップ）、
+  境界ノード=橙の破線枠（「この先 N 台省略」）、通常ノード=淡灰。device-type 絵文字
+  （🌐🔀🧱💻⚖️）・ホップ注記・zone の cluster 化を反映し、`rankdir=LR` で縦長を回避。
+  各ノードに `id="device:<device-id>"` と tooltip を付与（Phase 2 の双方向ジャンプ用）。
+  focus 不在時は `None`、同一入力→同一 DOT（冪等）。
+- `render_focus_diagram(...)` を追加し、`renderer.render` で SVG/PNG 化（LLM 不使用）。
+- `tests/test_partitioner.py` に focus 図テスト 5 件（冪等性・不在→None・注目強調＋`id`・
+  境界省略件数・ホップ注記／intra 限定・`_focus_data` の構造データ共有）。
+- 検証: small サンプルの `fw-01`（1 ホップ）を SVG レンダリング成功、SVG に
+  `id="device:..."` が残ることを確認。`python -m pytest tests/ -q` → **157 passed**
+  （既存 152 + focus 5）。
+
+### Phase 1: 同期プレビュー API ＋ カーソル→device 解決
+**目標**: `serve` に編集追従用の軽量エンドポイントを追加する。
+
+- [x] `POST /api/focus/preview`: `{source|yaml_text, focus:[...], hops}` を受け、
+      `build_focus_dot`→SVG を**同期**で返す（既存 `_read_yaml_source` を共有・
+      サイズ/パストラバーサル検証を流用）。存在しない device-id は 404/明示メッセージ。
+- [x] `POST /api/focus/resolve`（またはプレビュー応答に同梱）:
+      `{yaml_text, line}` から**カーソル行→ device-id** を解決するヘルパを実装
+      （device ブロック内は自ノード、connection 内は両端 2 台を返す）。
+- [x] device-id → 定義行番号のマップを返し、双方向ジャンプの基盤にする。
+- [x] `tests/test_web_api.py` に preview/resolve のテスト（正常・不正 YAML 400・
+      未知 device・connection 内カーソルで 2 台）。
+
+**完了の定義**: `curl` で「YAML＋行番号」から focus SVG が返る。`pytest` が緑。✅
+
+**実装（2026-07-16）**
+- 新規モジュール `edit_assist.py` を追加。`yaml.compose` の行マーク（`start_mark`/
+  `end_mark`）で device / physical-connection ブロックの行範囲を抽出し、`resolve_focus(text, line)`
+  で**カーソル行→注目 device** を解決（device 内＝1 台、connection 内＝両端 2 台、
+  該当なしは直前ブロックへフォールバック）。device-id→定義行のマップも返す（双方向
+  ジャンプ用）。不正 YAML は空結果を返す（例外にしない）。**追加依存なし**（pyyaml のみ）。
+- `POST /api/focus/preview`（同期）を追加。focus 明示 > line 解決の優先度で注目ノードを
+  決め、`build_focus_dot`→`renderer.render`（一時ディレクトリ）で **SVG をインライン返却**。
+  ライブ編集で频発する「未解決」「存在しない device」も **200** で構造化情報（`focus`/
+  `context`/`device_lines`/`not_found`/`message`）を返し、呼び出し側が直前の図を保持できるよう
+  にする（不正 YAML/スキーマエラーのみ 400）。`POST /api/focus/resolve` も追加。
+- テスト: `tests/test_edit_assist.py` 5 件（device/connection 解決・フォールバック・
+  不正 YAML→空・device_lines 網羅）と `tests/test_web_api.py` に focus API 6 件
+  （resolve device/connection・line プレビュー→SVG（id 埋込）・明示 focus・未知=200+not_found・
+  未解決=200+message・不正 YAML=400）。
+- 検証: `python -m pytest tests/ -q` → **168 passed**（既存 157 + edit_assist 5 + focus API 6）。
+
+### Phase 2: VS Code 拡張（ライブプレビュー本体）
+**目標**: エディタのカーソルに追従して focus 図を Webview 表示する。
+
+- [ ] `editor/` 配下に最小構成の拡張（TypeScript）を新設。
+      アクティブな `*.yaml`（iida-network-model と判定できるもの）を対象化。
+- [ ] `onDidChangeTextEditorSelection` / `onDidChangeTextDocument` を debounce で購読し、
+      本文＋カーソル行を `/api/focus/preview` に送って SVG を Webview 更新。
+- [ ] Webview UI: ホップ数スライダー（0–3）・追従 ON/OFF・再読込・serve 未起動時の案内。
+- [ ] SVG ノードクリック → `id="device:<id>"` から YAML 定義行へジャンプ（双方向）。
+- [ ] 不正 YAML 中は直前プレビューを保持し「解析待ち」を表示。
+- [ ] README に使い方（`serve` 起動 → 拡張インストール → プレビュー）を追記。
+
+**完了の定義**: small/medium サンプルでカーソル追従プレビューと行ジャンプが動作。
+
+### Phase 3: 編集支援の底上げ（任意・段階的）
+**目標**: プレビュー基盤の上に軽量な編集支援を積む。
+
+- [x] 保存時に既存 `validator`（design lint）を叩き、宙ぶらりんリンク・重複
+      device-id・IP 不整合・SPOF を **diagnostics（波線）**として表示。
+- [x] `device-id` / `interface-id` の**補完**（特に connection の endpoint）。
+- [x] device / interface / connection の**スニペット**挿入。
+- [~] 編集前後の意味的 diff（既存 `diff`）を保存時プレビューに重畳 → **見送り**。
+      focus プレビューの目的（注目ノード周辺の即時確認）と混ざると UX が複雑化し、
+      diff は既に CLI/GUI（`main.py diff`・`/api/diff`）で利用可能なため、本フェーズでは見送る。
+
+**完了の定義**: プレビューに加え、代表的な設計ミスをエディタ上で即検知できる。✅
+
+**実装（2026-07-16）**
+- サーバ: `edit_assist.symbol_lines(text)` を追加（device-id / connection-id / subnet-id・
+  prefix → 定義行のマップ）。`POST /api/lint` を追加し、`validator.validate` の
+  各 issue の `targets` を行に解決して `line` 付きで返す（行不明は `null`）。
+- 拡張: (A) `DiagnosticCollection` を作り、保存・オープン時に `/api/lint` を叩いて
+  severity をマップした波線を表示（400/未起動は既存診断を保持）。(B) yaml 向け
+  `CompletionItemProvider` で `device-id`/`interface-id` の値をドキュメント内定義から補完。
+  (C) `snippets/yaml.json`（`d2v-device`/`d2v-interface`/`d2v-connection`）を contributes。
+- テスト: `tests/test_edit_assist.py` に symbol_lines 2 件、`tests/test_web_api.py` に
+  lint API 3 件（行番号付き issue・target→device 行・不正 YAML=400）を追加。
+- 検証: `serve` に対し `/api/lint` を実行→ SPOF の issue が正しい device 行（L34=core-sw-01,
+  L18=fw-01 等）にマップされることを確認。拡張は `npm run compile` → **tsc エラー 0**。
+  `python -m pytest tests/ -q` → **173 passed**（既存 168 + edit_assist 2 + lint 3）。
+
+## 技術的決定事項（edit-assist）
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| 追加依存（Python 側） | **なし**（既存 `partitioner`/`renderer`/`graphviz` を再利用） | 決定論・軽量。graphviz 以外を増やさない |
+| 拡張の実装言語 | TypeScript（VS Code 拡張 API） | エディタ連携の標準。Webview で SVG を素直に表示できる |
+| 通信 | ローカル `serve`（既定 127.0.0.1）への HTTP | 既存 Web 基盤を再利用。拡張を薄く保つ |
+| プレビュー生成 | 決定論 DOT（LLM 不使用） | 追従描画に必要な即時性・無料・冪等性を満たす |
+| 出力先 | インメモリ／一時（ファイル永続化しない） | プレビューは使い捨て。`output/` を汚さない |
+
+## マイルストーン（edit-assist）
+
+### E0: 決定論 focus 図 — [x] `build_focus_dot` で LLM なし SVG（Phase 0）
+### E1: 同期 API — [x] `/api/focus/preview` と行→device 解決（Phase 1）
+### E2: 拡張 — [x] カーソル追従プレビュー＋双方向ジャンプ（Phase 2）
+### E3: 編集支援 — [x] lint 波線・補完・スニペット（Phase 3：保存時 diff 重畳は見送り）
+
+## 直近の次アクション（edit-assist）
+
+- [x] `build_focus_dot` を実装し、`_focus_data` の構造データから決定論 DOT を出す
+- [x] `render_focus_diagram` で SVG 化するヘルパと決定論性テストを追加
+- [x] `POST /api/focus/preview`（同期）と「行→device-id」解決を実装
+- [x] 最小 VS Code 拡張でカーソル追従プレビューを成立させる
 - [x] `main.py diff` サブコマンドで差分図＋構造 diff を出力

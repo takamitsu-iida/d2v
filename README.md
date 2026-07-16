@@ -774,6 +774,32 @@ curl -s -X POST http://127.0.0.1:8000/api/v2d/jobs \
 - 生成物はジョブごとに `output/webui/<job_id>/` に隔離して保存されます。
 - 状態はプロセス内メモリに保持するため、サーバ再起動で履歴はリセットされます。
 
+## エディタ連携 — フォーカスプレビュー（VS Code 拡張）
+
+規模の大きい YAML を編集していると全体像を見失いがちです。`editor/` に、
+**カーソル位置のノード（device）周辺の構成図をライブ表示**する VS Code 拡張を
+同梱しています。レンダリングは決定論経路（LLM 不使用）のため即時・無料で、
+編集のたびに再描画されます。
+
+- カーソルを動かすと、その device 周辺（N ホップ）の図が自動更新されます。
+  `physical-connection` 内にカーソルを置くと両端 2 台が対象になります。
+- ホップ数スライダー（1〜3）・追従 ON/OFF・図のノードクリックで YAML 定義行へジャンプ。
+- **design lint（波線）**・`device-id`/`interface-id` の**補完**・device/interface/接続の
+  **スニペット**（`d2v-device` など）で編集を支援します。
+- ローカルの `python main.py serve`（既定 `http://127.0.0.1:8000`）に接続します。
+
+```bash
+# 1. サーバを起動（別ターミナル）
+python main.py serve
+
+# 2. 拡張をビルド
+cd editor && npm install && npm run compile
+```
+
+VS Code で `editor/` を開き F5（Run Extension）で起動し、`iida-network-model` の
+YAML を開いて **「d2v: フォーカスプレビューを開く」** を実行します。
+詳細は [editor/README.md](editor/README.md) を参照してください。
+
 ## ライセンス
 
 MIT

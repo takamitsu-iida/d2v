@@ -1,0 +1,88 @@
+{
+  "name": "d2v-focus-preview",
+  "displayName": "d2v Focus Preview",
+  "description": "iida-network-model YAML を編集中、カーソル位置のノード周辺の構成図をライブプレビューします。",
+  "version": "0.1.0",
+  "publisher": "d2v",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "d2v.openFocusPreview",
+        "title": "d2v: フォーカスプレビューを開く",
+        "category": "d2v"
+      },
+      {
+        "command": "d2v.toggleFollow",
+        "title": "d2v: カーソル追従の ON/OFF",
+        "category": "d2v"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "d2v.openFocusPreview",
+          "when": "editorLangId == yaml",
+          "group": "navigation"
+        }
+      ]
+    },
+    "snippets": [
+      {
+        "language": "yaml",
+        "path": "./snippets/yaml.json"
+      }
+    ],
+    "configuration": {
+      "title": "d2v Focus Preview",
+      "properties": {
+        "d2v.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "d2v serve（FastAPI）のベース URL。`python main.py serve` の待ち受け先に合わせてください。"
+        },
+        "d2v.hops": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 3,
+          "description": "注目ノードから何ホップ先までをプレビューに含めるか。"
+        },
+        "d2v.follow": {
+          "type": "boolean",
+          "default": true,
+          "description": "カーソル移動・編集に追従してプレビューを更新する。"
+        },
+        "d2v.debounceMs": {
+          "type": "integer",
+          "default": 250,
+          "minimum": 0,
+          "maximum": 2000,
+          "description": "カーソル移動・編集からプレビュー更新までの待ち時間（ミリ秒）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
