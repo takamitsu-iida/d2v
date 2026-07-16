@@ -3,74 +3,118 @@
 本ドキュメントは `d2v`（Diagram to Vision）のソースコード構成と各モジュールの役割・内部設計を解説します。
 プロダクトとしての使い方は [README.md](README.md) を参照してください。
 
+本プロジェクトは 3 つの機能軸で構成されます。
+
+- **d2v（順方向）**: YAML トポロジ → LLM で DOT 生成 → 評価 → 改善ループ → 画像化。
+- **v2d（逆方向）**: 構成図の画像 → vision LLM で構造抽出 → iida-network-model YAML 化。
+- **Web GUI**: 上記 2 つをブラウザから実行し、進捗を SSE でリアルタイム表示。CLI は後方互換のまま維持。
+
 ## 全体アーキテクチャ
 
-`d2v` は「YAML トポロジ → LLM で DOT 生成 → 評価 → 改善ループ → 画像化」というパイプラインで構成されます。
-中核となるのは **生成 (generator) → 評価 (evaluator) → 改善 (pipeline) のフィードバックループ** で、
-評価スコアが閾値に達するまで自律的に図を改善します。
+中核は **生成 (generator) → 評価 (evaluator) → 改善 (pipeline) のフィードバックループ** で、
+評価スコアが閾値に達するまで自律的に図を改善します。CLI と Web GUI は共通の
+オーケストレーション層（`web/service.py`）と進捗イベント（`progress.py`）を共有します。
 
 ```mermaid
 flowchart TD
-    A[main.py<br/>CLI エントリポイント] --> B[parser.py<br/>YAML → 構造化テキスト]
-    B --> C{partitioner.py<br/>分割判定}
-    C -->|大規模 + zone あり| D[俯瞰図 + ゾーン詳細図<br/>複数枚に分割]
-    C -->|小規模 or zone なし| E[1 枚の図]
-    D --> F[pipeline.py<br/>生成→評価→改善ループ]
-    E --> F
+    subgraph FE[フロントエンド]
+        CLI[main.py<br/>CLI エントリポイント]
+        WEB[web/app.py<br/>FastAPI + SPA]
+    end
+    CLI --> SVC[web/service.py<br/>d2v/v2d オーケストレーション]
+    WEB --> JOBS[web/jobs.py<br/>非同期ジョブ + SSE]
+    JOBS --> SVC
+    SVC --> B[parser.py<br/>YAML → 構造化テキスト]
+    B --> C{partitioner.py<br/>分割 / focus / zone}
+    C --> F[pipeline.py<br/>生成→評価→改善ループ]
     F --> G[generator.py<br/>LLM で DOT 生成]
     G --> H[renderer.py<br/>DOT → PNG/SVG]
     H --> I[evaluator.py<br/>ルール + LLM 評価]
     I -->|score < threshold| G
     I -->|score >= threshold| J[visualizer.py<br/>スコア推移グラフ]
-    G -.-> K[llm/<br/>OpenAI / Anthropic / Ollama]
+    F -.進捗.-> PROG[progress.py<br/>ProgressEvent]
+    PROG -.SSE.-> WEB
+    G -.-> K[llm/<br/>OpenAI / Azure / Anthropic / Ollama]
     I -.-> K
+    IMG[構成図の画像] --> V2D[v2d/<br/>画像 → YAML]
+    V2D -.-> K
+    V2D --> B
 ```
 
 ## ディレクトリ構成
 
 ```
-main.py                     ← CLI エントリポイント（引数解析・進捗表示・分割制御）
+main.py                     ← CLI エントリポイント（d2v / v2d / serve サブコマンド）
 src/d2v/
 ├── __init__.py             ← パッケージ宣言
 ├── config.py               ← 設定管理（.env / 環境変数）
 ├── parser.py               ← iida-network-model YAML のパースとテキスト整形
-├── partitioner.py          ← 大規模トポロジのゾーン単位分割
-├── pipeline.py             ← 生成→評価→改善ループの制御
+├── partitioner.py          ← 分割（俯瞰図+詳細）/ focus / zone のサブグラフ生成
+├── pipeline.py             ← 生成→評価→改善ループの制御（progress_callback 対応）
 ├── generator.py            ← LLM による DOT コード生成
 ├── evaluator.py            ← ルールベース + LLM による品質評価
 ├── renderer.py             ← Graphviz による画像レンダリング
 ├── visualizer.py           ← スコア推移グラフの描画
-└── llm/                    ← LLM プロバイダー抽象化
-    ├── __init__.py         ← ファクトリー（get_llm）
-    ├── base.py             ← 抽象基底クラス LLMClient
-    ├── openai_client.py    ← OpenAI 実装
-    ├── anthropic_client.py ← Anthropic 実装
-    └── ollama_client.py    ← Ollama（ローカル LLM）実装
-prompts/                    ← LLM に渡すシステムプロンプト（生成・評価・改善）
+├── progress.py             ← 進捗イベント定義（CLI / GUI 共通）
+├── llm/                    ← LLM プロバイダー抽象化
+│   ├── __init__.py         ← ファクトリー（get_llm）
+│   ├── base.py             ← 抽象基底クラス LLMClient（chat / chat_with_images）
+│   ├── openai_client.py    ← OpenAI 実装
+│   ├── azure_openai_client.py ← Azure OpenAI（api-key ヘッダー方式・429 リトライ）
+│   ├── anthropic_client.py ← Anthropic 実装
+│   └── ollama_client.py    ← Ollama（ローカル LLM）実装
+├── v2d/                    ← vision-to-diagram（画像 → YAML）
+│   ├── preprocess.py       ← 画像の正規化・データURL化
+│   ├── schema.py           ← 中間表現（ExtractedDiagram）
+│   ├── extractor.py        ← vision LLM で画像 → 中間表現
+│   ├── refine.py           ← 抽出結果の整合性補正
+│   ├── converter.py        ← 中間表現 → iida-network-model YAML
+│   ├── evaluate.py         ← 抽出精度の計測・d2v 再描画
+│   └── pipeline.py         ← 画像 → YAML の一連フロー
+└── web/                    ← ブラウザ GUI（FastAPI）
+    ├── app.py              ← FastAPI アプリ・ルーティング・成果物配信
+    ├── service.py          ← d2v/v2d オーケストレーション（CLI と共通）
+    ├── jobs.py             ← 非同期ジョブ管理・SSE 進捗ストリーミング
+    ├── events.py           ← ジョブ状態・イベントのシリアライズ
+    └── static/             ← SPA（index.html / app.js / style.css）
+prompts/                    ← LLM に渡すプロンプト（生成・評価・改善・俯瞰図・v2d 抽出）
+tests/                      ← Web API・v2d の単体/回帰テスト（pytest）
 ```
 
 ## モジュール詳細
 
 ### `main.py` — CLI エントリポイント
 
-`argparse` で CLI 引数を解析し、`rich` でリッチな進捗表示を行います。処理の流れは以下の通りです。
+`main()` が `sys.argv[1]` を見てサブコマンドへ振り分けます（後方互換のため既定は従来の d2v）。
 
-1. `parser.load_model()` でトポロジ YAML を読み込み、`parser.build_text()` で構造化テキスト化。
-2. `partitioner.plan()` で分割の要否を判定。
-3. 分割不要なら `_run_single()`、分割ありなら `_run_split()` を呼び出す。
+- `v2d` → `run_v2d()`（画像 → YAML）
+- `serve` → `run_serve()`（FastAPI GUI を uvicorn で起動。既定 `127.0.0.1`）
+- それ以外 → `run_d2v()`（従来の YAML → 図）
 
-- `_run_single()`: `pipeline.run()` を 1 回実行し、最終スコアと出力ファイルをサマリー表示。2 回以上イテレーションした場合は `visualizer.plot_score_history()` でスコア推移グラフを生成。
-- `_run_split()`: 俯瞰図とゾーン詳細図それぞれについて `pipeline.run()` を実行し、各ベスト画像を出力ルートに集約。全体を表形式のサマリーで表示。
+`run_d2v()` は `argparse` で引数を解析し、`rich` で進捗表示します。中核の分岐ロジック自体は
+`web/service.py` に集約されており、`main.py` は**パラメータを組み立てて `service.run_d2v_job()` を
+呼ぶ**だけの薄い層です（CLI と GUI でロジックを二重化しないため）。
 
-主な CLI オプション: `--input/-i`、`--output-dir/-o`、`--format/-f`、`--max-iter/-n`、`--threshold/-t`、`--patience`、`--split-threshold`、`--no-split`、`--zone-opacity`。
+- `_cli_progress()`: `service` が emit するジョブレベルの進捗イベント（`topology` / `plan` /
+  `diagram_start`）を受け取り `rich` の見出しを表示。イテレーション詳細は `pipeline.run()` が
+  自身のコンソールへ出力する。
+- `_print_job_summary()` / `_print_single_summary()` / `_print_split_summary()`: ジョブ完了後の
+  最終サマリー（パネル・テーブル）をモード別に表示。single モードでは
+  `visualizer.plot_score_history()` でスコア推移グラフも生成。
+
+主な CLI オプション: `--input/-i`、`--output-dir/-o`、`--format/-f`、`--max-iter/-n`、
+`--threshold/-t`、`--patience`、`--split-threshold`、`--no-split`、`--focus`（+`--hops`）、
+`--zone`、`--zone-opacity`。`--focus` と `--zone` は排他。
 
 ### `config.py` — 設定管理
 
 `pydantic-settings` の `BaseSettings` を用い、`.env` ファイルと環境変数から設定を読み込みます。
 
-- `llm_provider`: `"openai"` / `"anthropic"` / `"ollama"` を選択。
-- 各プロバイダーの API キー（`SecretStr` で秘匿）とモデル名。
+- `llm_provider`: `"openai"` / `"azure"` / `"anthropic"` / `"ollama"` を選択。
+- 各プロバイダーの API キー（`SecretStr` で秘匿）とモデル名・エンドポイント。
 - `llm_max_tokens`: 生成トークン上限（デフォルト 8192）。大規模トポロジで DOT が途切れないよう十分大きく設定。
+- `boundary_agg_threshold` / `diagram_aspect_ratio`: 分割詳細図の境界スタブ集約・図の縦横比。
+- `v2d_max_image_dim`: vision LLM に渡す画像の最大辺ピクセル。
 - モジュール読み込み時に `settings = Settings()` シングルトンを生成。
 
 ### `parser.py` — トポロジのパースとテキスト整形
@@ -84,17 +128,21 @@ iida-network-model 形式の YAML を読み込み、LLM プロンプト用の構
 - `build_text()`: ノード一覧・物理接続一覧・L3 サブネット一覧を含む構造化テキストを生成。**見出しに台数・本数を埋め込む**（例: `## ノード一覧（7 台）`）ことで、後段の generator / evaluator が正規表現で期待数を抽出できるようにしている。
 - `parse()`: `load_model()` + `build_text()` の便宜ラッパー。
 
-### `partitioner.py` — 大規模トポロジの分割
+### `partitioner.py` — サブグラフ生成（分割 / focus / zone）
 
-ノード数がしきい値を超え、かつ `zone` が付与されている場合に、図を「俯瞰図 + ゾーン詳細図」へ分割します。
+大規模トポロジを扱いやすくするため、図を複数の観点でサブグラフへ切り出します。いずれも
+LLM 用テキストを表す `SubDiagram` を返し、後段の `pipeline` は 1 枚として扱います。
 
-- `SubDiagram` (dataclass): 分割後の 1 枚を表す。`key`（ファイル名用識別子）/ `title` / `text`（LLM 用テキスト）。
-- `should_split()`: 分割条件（`node_count > threshold` かつ `has_zones`）を判定。
-- `plan()`: 分割計画を返す。分割不要なら `None`。返り値の先頭が俯瞰図（`key="overview"`）、以降が各ゾーン詳細図。
-- `_overview_text()`: ゾーンを 1 まとまりに集約した俯瞰図テキスト。ゾーン間リンクは本数を集約して表示。
-- `_detail_text()`: 1 ゾーンの詳細図テキスト。他ゾーンへ跨る接続は「境界スタブ（外部参照ノード）」として含め、各図を自己完結させる。関連 L3 サブネットは `_subnets_for()` でインターフェース IP から自動抽出。
+- `SubDiagram` (dataclass): 生成対象の 1 枚を表す。`key`（ファイル名用識別子）/ `title` / `text`（LLM 用テキスト）。
+- `should_split()`: 自動分割条件（`node_count > threshold` かつ `has_zones`）を判定。
+- `plan()`: **俯瞰図 + ゾーン詳細図**への自動分割計画を返す（分割不要なら `None`）。先頭が俯瞰図（`key="overview"`）、以降が各ゾーン詳細図。
+  - `_overview_text()`: ゾーンを 1 まとまりに集約し、ゾーン間リンクを本数付きで示す俯瞰図テキスト。
+  - `_detail_text()`: 1 ゾーンの詳細図。他ゾーンへ跨る接続は「境界スタブ（外部参照ノード）」として含め自己完結させる。関連 L3 サブネットは `_subnets_for()` で自動抽出。
+- `focus_plan()`: **注目ノード集中図**。1 台以上の `device-id` を起点に、物理接続を `hops` ホップ辿って到達できるノードだけを抽出（`_build_adjacency()` / `hop_distances()` で BFS）。範囲外へ続く境界ノードには「この先に N 台（省略）」と注記。
+- `zone_plan()`: **ゾーン限定図**。指定ゾーンのノードだけを描画対象にし、対象外へ跨る接続は境界スタブとして表示。
+- `available_zones()`: トポロジに存在するゾーン名の一覧（バリデーション用）。
 
-分割により 1 枚あたりのノード数・トークン量を減らし、可読性向上と LLM のレート制限（TPM）緩和の両方に寄与します。
+分割・限定により 1 枚あたりのノード数・トークン量を減らし、可読性向上と LLM のレート制限（TPM）緩和の両方に寄与します。
 
 ### `pipeline.py` — 生成→評価→改善ループ
 
@@ -108,6 +156,9 @@ iida-network-model 形式の YAML を読み込み、LLM プロンプト用の構
   3. `evaluator.evaluate()` で評価。
   4. ベストスコアを更新（下がった場合は直前のベストを保持）。
   5. 終了判定: `passed`（閾値到達）、ベスト非更新が `patience` 回連続（早期終了）、または `max_iterations` 到達。
+  - **`progress_callback` 引数**（既定 `None`）: 各ステップで `progress.ProgressEvent` を追加的に
+    emit する。`None` なら従来どおり `rich` のコンソール表示のみ。Web GUI ではこのコールバック経由で
+    SSE に進捗を流す（CLI 表示は維持したまま非破壊で追加）。
 - `_improve()`: `prompts/diagram-improver.md` を用い、改善点を LLM に渡して修正済み DOT を得る（`generator._extract_dot()` を再利用）。
 - `_print_summary()`: イテレーション結果を `rich` のテーブルで表示。
 - 全イテレーションでレンダリングに失敗した場合は、有効な図を生成できなかった旨を表示して終了。
@@ -154,13 +205,74 @@ Graphviz DOT コードを PNG / SVG にレンダリングします。
 
 複数の LLM プロバイダーを共通インターフェースで扱うためのサブパッケージです。
 
-- `base.py`: 抽象基底クラス `LLMClient`。`chat(system, user) -> str` を定義。
+- `base.py`: 抽象基底クラス `LLMClient`。`chat(system, user) -> str` に加え、画像入力用の
+  `chat_with_images(system, user, image_data_urls) -> str`（vision）を定義。
 - `__init__.py`: ファクトリー `get_llm()`。`settings.llm_provider` に応じて適切なクライアントを生成。API キー欠落時はスタックトレースではなく分かりやすい設定エラーメッセージを表示して終了。
-- `openai_client.py`: `OpenAIClient`。`openai` SDK 経由。`max_retries=6` でレート制限時に指数バックオフ自動リトライ。
-- `anthropic_client.py`: `AnthropicClient`。`anthropic` SDK 経由。
+- `openai_client.py`: `OpenAIClient`。`openai` SDK 経由。レート制限時に指数バックオフ自動リトライ。
+- `azure_openai_client.py`: `AzureOpenAIClient`。社内 Azure OpenAI（api-key ヘッダー方式の REST エンドポイント）向け。POST 処理を `_post()` に共通化し `chat` / `chat_with_images` で共有、HTTP 429 の指数バックオフリトライを実装。
+- `anthropic_client.py`: `AnthropicClient`。`anthropic` SDK 経由。画像は独自の image ブロック形式で送信。
 - `ollama_client.py`: `OllamaClient`。Ollama の OpenAI 互換 API を `openai` SDK 経由で利用（`base_url` に `/v1` を付与）。
 
-新しいプロバイダーを追加する場合は、`LLMClient` を継承して `chat()` を実装し、`get_llm()` に分岐を追加します。
+`chat_with_images` は OpenAI 互換形式（`content` 配列に `image_url` の base64 データ URL）を基本とし、
+v2d の画像解析で使用します。新しいプロバイダーを追加する場合は、`LLMClient` を継承して `chat()` /
+`chat_with_images()` を実装し、`get_llm()` に分岐を追加します。
+
+### `progress.py` — 進捗イベント（CLI / GUI 共通）
+
+CLI（`rich` 表示）と Web GUI（SSE 配信）で**同一の進捗イベント源**を共有するための小さな中立モジュール。
+
+- `ProgressEvent` (dataclass): 1 イベント。`stage`（`generate` / `render` / `score` / `diagram_start` など）・`message`・`iteration` / `total`・`score` / `passed` / `is_best`・`extra`。
+- `ProgressCallback`: `Callable[[ProgressEvent], None]` の型エイリアス。
+- `emit(callback, event)`: コールバックが `None` でなければイベントを渡すヘルパー。
+
+`pipeline.run()` はパイプライン内のイベント、`web/service.py` はジョブレベルのイベント（`topology` /
+`plan` / `diagram_start` / `diagram_done` / `job_done`）を emit します。UI 層に依存しないよう標準ライブラリのみを使用。
+
+### `v2d/` — vision-to-diagram（画像 → YAML）
+
+構成図の**画像**から `iida-network-model` YAML を復元する逆方向パイプライン。抽出は
+マルチモーダル LLM（vision）を主軸とし、OCR/CV は補助・将来対応に留めています。
+
+- `preprocess.py`: 入力画像の検証（拡張子・存在・破損）と正規化（EXIF 向き補正 → RGB 化 →
+  最大辺 `v2d_max_image_dim` での縮小 → base64 データ URL 化）。結果は `PreprocessedImage`。
+- `schema.py`: 中間表現を Pydantic で定義。`ExtractedDiagram`（`nodes` / `edges` / `clusters` /
+  `notes` / `confidence`）。各要素が `confidence` を保持。
+- `extractor.py`: 前処理 → `prompts/v2d-extract.md` を用いた vision LLM 呼び出し → JSON パース →
+  `ExtractedDiagram` 検証（`extract_from_image`）。
+- `refine.py`: 抽出結果の整合性補正（同一ホスト名マージ・未定義参照の除去・自己ループ/重複エッジ除去・
+  クラスタからの zone 補完・孤立ノード検出）。補正内容は `RefineReport` に記録。
+- `converter.py`: 中間表現 → iida-network-model 辞書 / YAML（`build_model` / `to_yaml`）。device-id 正規化・
+  ポート名合成・エッジ segment の ip-subnet 集約。
+- `evaluate.py`: 抽出結果と正解 YAML の一致指標（ノード/エッジ P・R・F1、種別/ゾーン/loopback 一致率）を
+  計測（`compare_models` / `evaluate_files`）。`rerender_with_d2v()` で d2v 再描画し往復ループを閉じる。
+- `pipeline.py`: 画像 → 抽出 → 補正 → YAML 出力を束ねる `run(image_path, output_dir)`。成果物は
+  `<stem>.yaml` と `<stem>.v2d.json`（確信度・所見・補正内容・カウント）。既存 `parser.load_model` で
+  再パースし整合を確認。
+
+### `web/` — ブラウザ GUI（FastAPI）
+
+CLI を後方互換のまま維持しつつ、d2v/v2d をブラウザから実行する GUI。バックエンドは FastAPI、
+フロントは追加ビルド不要の静的 SPA（Vanilla JS）で、進捗は SSE で配信します。
+
+- `app.py`: FastAPI アプリとルーティング。ジョブ作成（`POST /api/d2v/jobs`・`POST /api/v2d/jobs`）、
+  状態取得（`GET /api/jobs/{id}`）、進捗ストリーム（`GET /api/jobs/{id}/events`・SSE）、成果物配信
+  （画像 / DOT / 評価 / v2d の YAML・サイドカー・元画像・再描画）を提供。入力検証（サイズ上限・
+  拡張子/MIME・パストラバーサル防止）と同時実行上限超過時の 429 を担う。
+- `service.py`: **CLI と共通のオーケストレーション層**。`run_d2v_job()`（single/split/focus/zone を
+  自動判別し `parser` → `partitioner` → `pipeline.run` を駆動）と `run_v2d_job()`（抽出 → 任意で
+  精度計測・再描画）を提供。検証エラーは `D2VJobError` を送出（UI で捕捉）。`D2VParams` /
+  `DiagramOutput` / `D2VJobResult` / `V2DJobResult` を定義。
+- `jobs.py`: インメモリの `JobRegistry` と `Job`。LLM 呼び出しは同期ブロッキングのため
+  `ThreadPoolExecutor` の別スレッドで実行し、進捗は `threading.Condition` + イベントリスト方式で
+  SSE ジェネレータへ配信（遅延接続でも全イベントをリプレイ可能・複数接続が独立購読可能）。
+  `MAX_ACTIVE_JOBS` で同時実行を制限し、超過時は `JobBusyError`。成果物は `output/webui/<job_id>/` に隔離。
+- `events.py`: `JobState`（queued/running/succeeded/failed）と `event_to_dict()`（`ProgressEvent` を
+  SSE 用 JSON へ。Path 等を再帰的に str 化）。
+- `static/`: SPA 本体。`index.html`（d2v / v2d の 2 タブ・履歴ドロワー）、`app.js`（フォーム制御・
+  `EventSource` による SSE 購読・結果描画・履歴/共有リンク/v2d→d2v 連携）、`style.css`。
+
+進捗のリアルタイム表示は「`pipeline`/`service` が `ProgressEvent` を emit → `Job.add_event` が
+`Condition` で通知 → SSE ジェネレータが `yield` → ブラウザの `EventSource` が受信」という流れです。
 
 ## データフロー（構造化テキストを軸に）
 
@@ -176,9 +288,22 @@ Graphviz DOT コードを PNG / SVG にレンダリングします。
 
 | やりたいこと | 変更箇所 |
 |-------------|---------|
-| 新しい LLM プロバイダーを追加 | `llm/` に `LLMClient` 実装を追加し `get_llm()` に分岐を追加 |
+| 新しい LLM プロバイダーを追加 | `llm/` に `LLMClient` 実装（`chat` / `chat_with_images`）を追加し `get_llm()` に分岐を追加 |
 | 生成・評価・改善の指示を調整 | `prompts/*.md` を編集（コード変更不要） |
 | 評価のルールを追加・変更 | `evaluator._run_rule_checks()` と `evaluate()` のペナルティロジック |
-| 分割ロジックを調整 | `partitioner.plan()` / `_overview_text()` / `_detail_text()` |
+| 分割 / focus / zone ロジックを調整 | `partitioner.plan()` / `focus_plan()` / `zone_plan()` / `_overview_text()` / `_detail_text()` |
 | 入力スキーマを拡張 | `parser.load_model()` / `device_lines()` / `connection_line()` |
 | 出力の見た目（透過度など） | `renderer.apply_zone_opacity()` / `prompts/diagram-system.md` |
+| CLI と GUI 共通の生成フローを変更 | `web/service.py`（`run_d2v_job` / `run_v2d_job`）— CLI・GUI 双方に反映される |
+| 進捗イベントの種類を追加 | `progress.ProgressEvent` の `stage` を追加し、`pipeline` / `service` で emit、フロントの `app.js` でハンドラ追加 |
+| GUI の画面・API を変更 | `web/app.py`（ルーティング・検証）/ `web/static/`（SPA） |
+| v2d の抽出・変換を調整 | `prompts/v2d-extract.md` / `v2d/extractor.py` / `v2d/refine.py` / `v2d/converter.py` |
+
+## テスト
+
+`tests/` に `pytest` ベースのテストを配置しています（LLM を使わない決定論部分を網羅）。
+
+- `test_v2d_converter.py` / `test_v2d_refine.py` / `test_v2d_evaluate.py` / `test_v2d_preprocess_extract.py`:
+  v2d の中間表現・変換・補正・精度計測・前処理/抽出（LLM はモック）。
+- `test_web_api.py`: Web API を FastAPI `TestClient` で検証。ジョブ作成・状態遷移・成果物取得・
+  不正入力拒否（パストラバーサル・サイズ超過・不正 MIME 等）。`service` 層をフェイクへ差し替え LLM 不要。
