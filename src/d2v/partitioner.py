@@ -121,16 +121,29 @@ def _overview_text(
     return "\n".join(lines)
 
 
-def _detail_text(
-    model: TopologyModel,
-    zone: str,
-    devices: list[_YamlDict],
-    intra: list[_YamlDict],
-    boundary: list[_YamlDict],
-) -> str:
-    """1 ゾーンの詳細図テキストを生成する（境界スタブを含む）。"""
-    zone_ids = {d.get("device-id", "") for d in devices}
+@dataclass
+class _BoundaryPlan:
+    """境界スタブの集約計画（詳細図に含める外部参照ノード群の振り分け結果）。"""
 
+    external_ifaces: "OrderedDict[str, set[str]]"      # 外部デバイスID -> 境界IF集合
+    individual_ext: list[str]                          # 個別表示する外部デバイスID
+    aggregated_zones_ordered: list[str]                # 集約する外部ゾーン（初出順）
+    ext_zone_devices: "OrderedDict[str, list[str]]"    # 外部ゾーン -> 属する外部デバイスID
+    indiv_boundary: list[_YamlDict]                    # 個別表示する境界接続
+    agg_boundary: "OrderedDict[tuple[str, str], int]"  # (内部デバイスID, 外部ゾーン) -> 集約本数
+
+
+def _aggregate_boundary_stubs(
+    model: TopologyModel,
+    zone_ids: set[str],
+    boundary: list[_YamlDict],
+) -> _BoundaryPlan:
+    """境界接続を分析し、外部参照ノードの個別表示／ゾーン集約を振り分ける。
+
+    多数の境界スタブが横一列に並んで詳細図が横長になるのを防ぐため、1 つの外部
+    ゾーンからの境界デバイスが ``settings.boundary_agg_threshold`` を超える場合は
+    そのゾーンを 1 ノードに集約する。
+    """
     # 境界接続から外部デバイスと、そのデバイスが使う境界インターフェースを収集
     external_ifaces: OrderedDict[str, set[str]] = OrderedDict()
     for conn in boundary:
@@ -176,8 +189,29 @@ def _detail_text(
         else:
             indiv_boundary.append(conn)
 
-    node_total = len(devices) + len(individual_ext) + len(aggregated_zones)
-    conn_total = len(intra) + len(indiv_boundary) + len(agg_boundary)
+    return _BoundaryPlan(
+        external_ifaces=external_ifaces,
+        individual_ext=individual_ext,
+        aggregated_zones_ordered=aggregated_zones_ordered,
+        ext_zone_devices=ext_zone_devices,
+        indiv_boundary=indiv_boundary,
+        agg_boundary=agg_boundary,
+    )
+
+
+def _detail_text(
+    model: TopologyModel,
+    zone: str,
+    devices: list[_YamlDict],
+    intra: list[_YamlDict],
+    boundary: list[_YamlDict],
+) -> str:
+    """1 ゾーンの詳細図テキストを生成する（境界スタブを含む）。"""
+    zone_ids = {d.get("device-id", "") for d in devices}
+    bp = _aggregate_boundary_stubs(model, zone_ids, boundary)
+
+    node_total = len(devices) + len(bp.individual_ext) + len(bp.aggregated_zones_ordered)
+    conn_total = len(intra) + len(bp.indiv_boundary) + len(bp.agg_boundary)
 
     lines: list[str] = []
     lines.append(f"# ゾーン詳細図: {zone}\n")
@@ -195,17 +229,17 @@ def _detail_text(
     for dev in devices:
         lines.extend(parser.device_lines(dev))
     # 個別表示する外部スタブ
-    for did in individual_ext:
+    for did in bp.individual_ext:
         ext_dev = model.device_map.get(did, {"device-id": did})
         ext_zone = model.zone_of(did) or "unknown"
         lines.extend(
             parser.device_lines(
-                ext_dev, only_interfaces=external_ifaces[did], external_zone=ext_zone
+                ext_dev, only_interfaces=bp.external_ifaces[did], external_zone=ext_zone
             )
         )
     # ゾーン集約する外部スタブ（1 ゾーン = 1 ノード）
-    for z in aggregated_zones_ordered:
-        n = len(ext_zone_devices[z])
+    for z in bp.aggregated_zones_ordered:
+        n = len(bp.ext_zone_devices[z])
         stub_id = f"ext-{_safe_key(z)}"
         lines.append(
             f"- {stub_id} ({z} ゾーン全体)  "
@@ -219,7 +253,7 @@ def _detail_text(
         if line is not None:
             lines.append(line)
     # 個別の境界接続
-    for conn in indiv_boundary:
+    for conn in bp.indiv_boundary:
         zpair = _endpoint_zones(model, conn)
         other = ""
         if zpair is not None:
@@ -229,7 +263,7 @@ def _detail_text(
         if line is not None:
             lines.append(line)
     # 集約した境界接続（ゾーン内デバイス <--> 外部ゾーン集約ノード）
-    for (int_did, ez), cnt in agg_boundary.items():
+    for (int_did, ez), cnt in bp.agg_boundary.items():
         stub_id = f"ext-{_safe_key(ez)}"
         suffix = f"{cnt} 本のリンクを集約" if cnt > 1 else "境界リンク"
         lines.append(

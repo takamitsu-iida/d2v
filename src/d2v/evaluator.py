@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
-import sys
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from d2v.llm import get_llm
+from d2v.prompts import load_prompt
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Pydantic モデル
@@ -99,14 +100,6 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _JSON_OBJ_RE = re.compile(r"\{.*?\}", re.DOTALL)
 
 
-def _load_prompt(filename: str) -> str:
-    path = _PROMPTS_DIR / filename
-    if not path.exists():
-        print(f"\n[エラー] プロンプトファイルが見つかりません: {path}\n", file=sys.stderr)
-        sys.exit(1)
-    return path.read_text(encoding="utf-8")
-
-
 def _parse_llm_json(text: str) -> tuple[int, list[str]]:
     """LLM 応答テキストから score と issues を抽出する。"""
     # コードブロック内の JSON を優先
@@ -116,6 +109,10 @@ def _parse_llm_json(text: str) -> tuple[int, list[str]]:
     # JSON オブジェクトを抽出
     m2 = _JSON_OBJ_RE.search(raw)
     if not m2:
+        logger.warning(
+            "LLM 評価レスポンスから JSON を抽出できませんでした（スコア 5 で継続）。応答先頭: %s",
+            text[:200],
+        )
         return 5, ["LLM の評価レスポンスから JSON を抽出できませんでした。"]
 
     try:
@@ -123,7 +120,12 @@ def _parse_llm_json(text: str) -> tuple[int, list[str]]:
         score = max(1, min(10, int(data.get("score", 5))))
         issues = [str(i) for i in data.get("issues", [])]
         return score, issues
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(
+            "LLM 評価レスポンスの JSON パースに失敗しました（スコア 5 で継続）: %s / 対象: %s",
+            e,
+            m2.group()[:200],
+        )
         return 5, ["LLM の評価レスポンスの JSON パースに失敗しました。"]
 
 
@@ -169,7 +171,7 @@ def evaluate(
     evaluator_prompt = (
         "diagram-evaluator-overview.md" if is_overview else "diagram-evaluator.md"
     )
-    system_prompt = _load_prompt(evaluator_prompt)
+    system_prompt = load_prompt(evaluator_prompt)
     user_message = (
         f"## トポロジデータ\n\n{topology_text}\n\n"
         f"## 評価対象 DOT コード\n\n```dot\n{dot_code}\n```"

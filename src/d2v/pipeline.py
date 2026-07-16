@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import shutil
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,8 +10,10 @@ from rich.console import Console
 from rich.table import Table
 
 from d2v import evaluator, generator, renderer
+from d2v.errors import RenderFailedError
 from d2v.evaluator import EvaluationResult
 from d2v.progress import ProgressCallback, ProgressEvent, emit
+from d2v.prompts import load_prompt
 
 console = Console()
 
@@ -51,23 +52,13 @@ class PipelineResult:
 # 改善プロンプト
 # ---------------------------------------------------------------------------
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
-
-
-def _load_prompt(filename: str) -> str:
-    path = _PROMPTS_DIR / filename
-    if not path.exists():
-        print(f"\n[エラー] プロンプトファイルが見つかりません: {path}\n", file=sys.stderr)
-        sys.exit(1)
-    return path.read_text(encoding="utf-8")
-
 
 def _improve(topology_text: str, dot_code: str, issues: list[str]) -> str:
     """評価結果の改善点を LLM に渡し、修正済み DOT コードを返す。"""
     from d2v.llm import get_llm
     from d2v.generator import _extract_dot  # DOT 抽出ユーティリティを再利用
 
-    system_prompt = _load_prompt("diagram-improver.md")
+    system_prompt = load_prompt("diagram-improver.md")
     issues_text = "\n".join(f"- {issue}" for issue in issues)
     user_message = (
         f"## トポロジデータ\n\n{topology_text}\n\n"
@@ -78,6 +69,26 @@ def _improve(topology_text: str, dot_code: str, issues: list[str]) -> str:
     llm = get_llm()
     response = llm.chat(system=system_prompt, user=user_message)
     return _extract_dot(response)
+
+
+def _should_early_stop(
+    no_improve_streak: int,
+    patience: int,
+    iteration: int,
+    max_iterations: int,
+) -> bool:
+    """改善が頭打ちのとき早期終了すべきか判定する（純粋関数）。
+
+    ベストスコアが ``patience`` 回連続で更新されず、かつ次のイテレーションが
+    残っている（最終回ではない）場合に True を返す。
+
+    Args:
+        no_improve_streak: ベスト非更新が続いた回数。
+        patience: 早期終了を許容する非更新の連続回数。
+        iteration: 現在のイテレーション番号（0 始まり）。
+        max_iterations: 最大イテレーション数。
+    """
+    return no_improve_streak >= patience and iteration + 1 < max_iterations
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +257,7 @@ def run(
 
         # ── 早期終了判定（改善が頭打ちなら打ち切って高速化）───────
         no_improve_streak = 0 if is_best else no_improve_streak + 1
-        if no_improve_streak >= patience and i + 1 < max_iterations:
+        if _should_early_stop(no_improve_streak, patience, i, max_iterations):
             console.print(
                 f"\n  [yellow]→ スコアが {no_improve_streak} 回連続で改善しなかったため"
                 f"早期終了します（ベスト: {best_record.result.score}/10）。[/yellow]"
@@ -264,12 +275,10 @@ def run(
     # ── ベスト成果物をルートにコピー ─────────────────────────────
     if best_record is None:
         # 全イテレーションがレンダリングに失敗した場合
-        console.print(
-            "\n[bold red]✗ 全イテレーションでレンダリングに失敗しました。"
-            "有効な図を生成できませんでした。[/bold red]\n"
-            "  [dim]各 iter ディレクトリの .dot ファイルを確認してください。[/dim]"
+        raise RenderFailedError(
+            "全イテレーションでレンダリングに失敗しました。有効な図を生成できませんでした。"
+            "各 iter ディレクトリの .dot ファイルを確認してください。"
         )
-        sys.exit(1)
 
     best_final_image = output_dir / f"{stem}_best.{fmt}"
     shutil.copy2(best_record.image_path, best_final_image)

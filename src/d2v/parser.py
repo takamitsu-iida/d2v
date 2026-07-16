@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from d2v.errors import InputError
 
 _YamlDict = dict[str, Any]
 
@@ -37,12 +38,10 @@ def _load_yaml(path: Path) -> _YamlDict:
     try:
         with path.open(encoding="utf-8") as f:
             return yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"\n[エラー] ファイルが見つかりません: {path}\n", file=sys.stderr)
-        sys.exit(1)
+    except FileNotFoundError as e:
+        raise InputError(f"ファイルが見つかりません: {path}") from e
     except yaml.YAMLError as e:
-        print(f"\n[エラー] YAML 解析に失敗しました: {e}\n", file=sys.stderr)
-        sys.exit(1)
+        raise InputError(f"YAML 解析に失敗しました: {e}") from e
 
 
 def _require(d: _YamlDict, key: str, context: str) -> Any:
@@ -69,8 +68,7 @@ def load_model(path: Path) -> TopologyModel:
         phys = _require(root, "physical-layer", "network-model")
         devices: list[_YamlDict] = _require(phys, "device", "physical-layer")
     except TopologyParseError as e:
-        print(f"\n[スキーマエラー] {e}\n", file=sys.stderr)
-        sys.exit(1)
+        raise InputError(f"スキーマエラー: {e}") from e
 
     connections: list[_YamlDict] = phys.get("physical-connection", [])
     layer3 = root.get("layer3-layer", {})

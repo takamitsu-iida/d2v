@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import math
 import re
-import sys
 from pathlib import Path
 
 import graphviz
 
 from d2v.config import settings
+from d2v.errors import GraphvizNotFoundError
 
 
 class RenderError(Exception):
@@ -149,7 +149,7 @@ def _graph_dimensions(dot_code: str) -> tuple[float, float] | None:
 def fit_aspect_ratio(
     dot_code: str,
     target_wh: float,
-    tolerance: float = 2.0,
+    tolerance: float | None = None,
 ) -> str:
     """図の縦横比を目標に近づける（横長すぎる図は rankdir=LR で縦積みにする）。
 
@@ -162,11 +162,14 @@ def fit_aspect_ratio(
     Args:
         dot_code: Graphviz DOT 形式のコード
         target_wh: 目標の幅／高さ比（例: 4:3 なら 4/3≈1.33）。0 以下で無効化。
-        tolerance: この倍率までの横長は許容し、切り替えない。
+        tolerance: この倍率までの横長は許容し、切り替えない。None のとき
+            ``settings.diagram_aspect_tolerance`` を使う。
 
     Returns:
         必要に応じて rankdir を調整した DOT コード
     """
+    if tolerance is None:
+        tolerance = settings.diagram_aspect_tolerance
     if target_wh <= 0:
         return dot_code
     dims = _graph_dimensions(dot_code)
@@ -230,14 +233,12 @@ def render(
             directory=str(output_dir),
             cleanup=True,  # 中間 .gv ファイルを削除
         )
-    except graphviz.ExecutableNotFound:
-        # Graphviz 未インストールは環境起因の回復不能エラー → 即終了
-        print(
-            "\n[エラー] Graphviz がインストールされていません。\n"
-            "  sudo apt install graphviz\n",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    except graphviz.ExecutableNotFound as e:
+        # Graphviz 未インストールは環境起因の回復不能エラー
+        raise GraphvizNotFoundError(
+            "Graphviz がインストールされていません。次を実行してください:\n"
+            "  sudo apt install graphviz"
+        ) from e
     except Exception as e:
         # DOT の構文エラー等は改善ループで回復しうるため例外を送出する
         raise RenderError(str(e), dot_path) from e

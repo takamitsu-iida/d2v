@@ -18,6 +18,7 @@ from rich.rule import Rule
 from rich.table import Table
 
 from d2v import partitioner, visualizer
+from d2v.errors import D2VError
 from d2v.progress import ProgressEvent
 from d2v.web import service
 from d2v.web.service import D2VJobError, D2VParams
@@ -208,7 +209,7 @@ def run_d2v() -> None:
     )
     try:
         result = service.run_d2v_job(params, progress=_cli_progress)
-    except D2VJobError as e:
+    except (D2VJobError, D2VError) as e:
         console.print(f"\n[bold red]✗ {e}[/bold red]\n")
         sys.exit(1)
 
@@ -373,6 +374,9 @@ def run_v2d(argv: list[str]) -> None:
         sys.exit(1)
     except ExtractionError as e:
         console.print(f"\n[bold red]✗ 抽出エラー:[/bold red] {e}\n")
+        sys.exit(1)
+    except D2VError as e:
+        console.print(f"\n[bold red]✗ {e}[/bold red]\n")
         sys.exit(1)
 
     # ── 抽出サマリー ──────────────────────────────────────────────

@@ -9,15 +9,12 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from pathlib import Path
 
 from d2v.llm import get_llm
+from d2v.prompts import load_prompt
 from d2v.v2d.preprocess import PreprocessedImage, load_and_preprocess
 from d2v.v2d.schema import ExtractedDiagram
-
-# prompts/ ディレクトリはプロジェクトルート直下
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "prompts"
 
 # 応答から JSON を取り出す正規表現（コードフェンス優先→生オブジェクト）
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -26,14 +23,6 @@ _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 class ExtractionError(RuntimeError):
     """画像からの中間表現抽出に失敗したことを示すエラー。"""
-
-
-def _load_prompt(filename: str) -> str:
-    path = _PROMPTS_DIR / filename
-    if not path.exists():
-        print(f"\n[エラー] プロンプトファイルが見つかりません: {path}\n", file=sys.stderr)
-        sys.exit(1)
-    return path.read_text(encoding="utf-8")
 
 
 def _parse_json(text: str) -> dict:
@@ -68,7 +57,7 @@ def extract_from_image(
         ExtractionError: 応答の解析やスキーマ検証に失敗した場合。
     """
     pre = load_and_preprocess(image_path, max_dim=max_dim)
-    system_prompt = _load_prompt("v2d-extract.md")
+    system_prompt = load_prompt("v2d-extract.md")
     user_message = (
         "このネットワーク構成図の画像を解析し、スキーマに従った JSON のみを出力してください。"
     )

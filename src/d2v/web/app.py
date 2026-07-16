@@ -26,9 +26,6 @@ _ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _EXAMPLES_DIR = _ROOT / "examples"
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-# 貼り付け YAML の最大バイト数（OWASP: 過大入力によるリソース枯渇を防ぐ）
-_MAX_YAML_BYTES = 1_000_000
-
 app = FastAPI(
     title="d2v Web GUI",
     description="iida-network-model YAML → 構成図 / 画像 → YAML をブラウザで実行する GUI",
@@ -105,7 +102,7 @@ def _resolve_input_text(req: D2VJobRequest) -> str:
     if req.source == "text":
         if not req.yaml_text or not req.yaml_text.strip():
             raise HTTPException(400, "source=text のときは yaml_text を指定してください。")
-        if len(req.yaml_text.encode("utf-8")) > _MAX_YAML_BYTES:
+        if len(req.yaml_text.encode("utf-8")) > settings.webui_max_yaml_bytes:
             raise HTTPException(413, "YAML が大きすぎます。")
         return req.yaml_text
     raise HTTPException(400, "source は 'example' または 'text' を指定してください。")

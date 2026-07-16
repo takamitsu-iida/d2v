@@ -6,6 +6,8 @@ import time
 
 import httpx
 
+from d2v.errors import LLMRequestError
+
 from .base import LLMClient
 
 # リトライ対象の HTTP ステータス（レート制限・一時的なサーバエラー）
@@ -97,11 +99,9 @@ class AzureOpenAIClient(LLMClient):
                 if attempt < self._max_retries:
                     time.sleep(min(2 ** attempt, 60) + random.uniform(0, 1))
                     continue
-                print(
-                    f"\n[エラー] Azure OpenAI エンドポイントへの接続に失敗しました: {e}\n",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
+                raise LLMRequestError(
+                    f"Azure OpenAI エンドポイントへの接続に失敗しました: {e}"
+                ) from e
 
             if res.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
                 wait = self._retry_after_seconds(res, attempt)
@@ -115,20 +115,16 @@ class AzureOpenAIClient(LLMClient):
                 continue
 
             if res.status_code >= 400:
-                print(
-                    f"\n[エラー] Azure OpenAI エンドポイントが HTTP {res.status_code} "
-                    f"を返しました:\n{res.text}\n",
-                    file=sys.stderr,
+                raise LLMRequestError(
+                    f"Azure OpenAI エンドポイントが HTTP {res.status_code} を返しました:\n"
+                    f"{res.text}"
                 )
-                sys.exit(1)
 
             data = res.json()
             return data["choices"][0]["message"]["content"] or ""
 
         # リトライを使い切った場合
-        print(
-            f"\n[エラー] Azure OpenAI エンドポイントへのリクエストが "
-            f"{self._max_retries} 回のリトライ後も失敗しました。{last_error}\n",
-            file=sys.stderr,
+        raise LLMRequestError(
+            f"Azure OpenAI エンドポイントへのリクエストが "
+            f"{self._max_retries} 回のリトライ後も失敗しました。{last_error}"
         )
-        sys.exit(1)

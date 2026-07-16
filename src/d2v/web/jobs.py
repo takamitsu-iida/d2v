@@ -20,13 +20,12 @@ from d2v.progress import ProgressEvent
 from d2v.web import service
 from d2v.web.events import JobState, event_to_dict
 from d2v.web.service import D2VJobError, D2VJobResult, D2VParams, V2DJobResult
+from d2v.config import settings
+from d2v.errors import D2VError
 
 # 出力先（既存 output/ 規約を踏襲。webui/<job_id>/ に隔離）
 _ROOT = Path(__file__).resolve().parent.parent.parent.parent
 WEBUI_DIR = _ROOT / "output" / "webui"
-
-# 同時に受け付ける実行中/待機中ジョブの上限（過負荷・レート制限超過を防ぐ）
-MAX_ACTIVE_JOBS = 4
 
 
 class JobBusyError(Exception):
@@ -191,9 +190,9 @@ class JobRegistry:
                 1 for j in self._jobs.values()
                 if j.state in (JobState.QUEUED, JobState.RUNNING)
             )
-        if active >= MAX_ACTIVE_JOBS:
+        if active >= settings.webui_max_active_jobs:
             raise JobBusyError(
-                f"同時に実行できるジョブは {MAX_ACTIVE_JOBS} 件までです。"
+                f"同時に実行できるジョブは {settings.webui_max_active_jobs} 件までです。"
                 "実行中のジョブの完了を待ってから再試行してください。"
             )
 
@@ -240,8 +239,12 @@ class JobRegistry:
             job.error = str(e)
             job.state = JobState.FAILED
             job.add_event(ProgressEvent(stage="error", message=str(e)))
-        except SystemExit as e:
-            # get_llm の認証エラーや pipeline の全レンダリング失敗など
+        except D2VError as e:
+            # LLM 認証エラー・プロンプト欠如・レンダリング失敗など
+            job.error = str(e)
+            job.state = JobState.FAILED
+            job.add_event(ProgressEvent(stage="error", message=str(e)))
+        except SystemExit:
             msg = (
                 "処理が中断されました（LLM 認証エラーやレンダリング失敗の可能性）。"
                 "サーバーログと .env の設定を確認してください。"
@@ -298,6 +301,11 @@ class JobRegistry:
             )
             job.result = result
             job.state = JobState.SUCCEEDED
+        except D2VError as e:
+            # LLM 認証エラー・プロンプト欠如など
+            job.error = str(e)
+            job.state = JobState.FAILED
+            job.add_event(ProgressEvent(stage="error", message=str(e)))
         except SystemExit:
             msg = (
                 "処理が中断されました（LLM 認証エラーや解析失敗の可能性）。"

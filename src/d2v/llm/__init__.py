@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-import sys
+from typing import NoReturn
+
+from anthropic import AnthropicError
+from openai import OpenAIError
 
 from d2v.config import settings
+from d2v.errors import LLMConfigError
 
 from .anthropic_client import AnthropicClient
 from .azure_openai_client import AzureOpenAIClient
@@ -54,13 +58,17 @@ _MISSING_KEY_MESSAGES: dict[str, str] = {
 }
 
 
-def _abort_missing_credentials(provider: str) -> None:
-    """認証情報不足を分かりやすく報告してプロセスを終了する。"""
+def _credentials_message(provider: str) -> str:
+    """プロバイダー別の「認証情報が不足」メッセージ（セットアップ手順付き）を返す。"""
     msg = _MISSING_KEY_MESSAGES.get(
         provider, f"プロバイダー '{provider}' の認証情報が設定されていません。"
     )
-    print(f"\n[設定エラー] {msg}{_SETUP_HINT}\n", file=sys.stderr)
-    sys.exit(1)
+    return f"{msg}{_SETUP_HINT}"
+
+
+def _abort_missing_credentials(provider: str) -> NoReturn:
+    """認証情報不足を分かりやすいメッセージ付きの例外として送出する。"""
+    raise LLMConfigError(_credentials_message(provider))
 
 
 def get_llm() -> LLMClient:
@@ -73,7 +81,7 @@ def get_llm() -> LLMClient:
         ollama    : OllamaClient (ローカル LLM)
 
     .env が未設定の場合や API キーが空の場合は、スタックトレースではなく
-    分かりやすいエラーメッセージを表示してプロセスを終了する。
+    分かりやすいメッセージ付きの ``LLMConfigError`` を送出する。
     """
     provider = settings.llm_provider
 
@@ -86,8 +94,8 @@ def get_llm() -> LLMClient:
                 model=settings.openai_model,
                 max_tokens=settings.llm_max_tokens,
             )
-        except Exception:
-            _abort_missing_credentials("openai")
+        except OpenAIError as e:
+            raise LLMConfigError(_credentials_message("openai")) from e
 
     if provider == "azure":
         if not (
@@ -95,15 +103,15 @@ def get_llm() -> LLMClient:
             and settings.azure_openai_endpoint
         ):
             _abort_missing_credentials("azure")
-        try:
-            return AzureOpenAIClient(
-                api_key=settings.azure_openai_api_key.get_secret_value(),
-                endpoint=settings.azure_openai_endpoint,
-                max_tokens=settings.llm_max_tokens,
-                max_retries=settings.max_retries,
-            )
-        except Exception:
-            _abort_missing_credentials("azure")
+        # AzureOpenAIClient は OpenAI SDK を使わない自前実装で、コンストラクタは
+        # 設定を保持するだけで例外を投げない。認証・接続エラーは実リクエスト時に
+        # LLMRequestError として送出される。
+        return AzureOpenAIClient(
+            api_key=settings.azure_openai_api_key.get_secret_value(),
+            endpoint=settings.azure_openai_endpoint,
+            max_tokens=settings.llm_max_tokens,
+            max_retries=settings.max_retries,
+        )
 
     if provider == "anthropic":
         if not settings.anthropic_api_key.get_secret_value():
@@ -114,8 +122,8 @@ def get_llm() -> LLMClient:
                 model=settings.anthropic_model,
                 max_tokens=settings.llm_max_tokens,
             )
-        except Exception:
-            _abort_missing_credentials("anthropic")
+        except AnthropicError as e:
+            raise LLMConfigError(_credentials_message("anthropic")) from e
 
     if provider == "ollama":
         try:
@@ -124,16 +132,14 @@ def get_llm() -> LLMClient:
                 model=settings.ollama_model,
                 max_tokens=settings.llm_max_tokens,
             )
-        except Exception:
-            _abort_missing_credentials("ollama")
+        except OpenAIError as e:
+            raise LLMConfigError(_credentials_message("ollama")) from e
 
-    print(
-        f"\n[設定エラー] 未対応の LLM プロバイダー: '{provider}'\n"
+    raise LLMConfigError(
+        f"未対応の LLM プロバイダー: '{provider}'。"
         "LLM_PROVIDER は 'openai' / 'azure' / 'anthropic' / 'ollama' のいずれかを指定してください。"
-        f"{_SETUP_HINT}\n",
-        file=sys.stderr,
+        f"{_SETUP_HINT}"
     )
-    sys.exit(1)
 
 
 __all__ = [

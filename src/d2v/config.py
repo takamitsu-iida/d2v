@@ -51,9 +51,19 @@ class Settings(BaseSettings):
     # この比に近づける。3:4（縦3・横4）なら 4/3≈1.333。0 以下で無効化。
     diagram_aspect_ratio: float = 4 / 3
 
+    # 縦横比調整の許容倍率。幅/高さが目標比の この倍数 以内なら十分見やすいと
+    # みなして rankdir を切り替えない（過剰な組み替えを防ぐ）。
+    diagram_aspect_tolerance: float = 2.0
+
     # v2d（画像→トポロジ）: vision LLM へ渡す画像の最大辺ピクセル。
     # これを超える画像は縦横比を保って縮小する（トークン量と精度のバランス）。
     v2d_max_image_dim: int = 2048
+
+    # Web GUI: 貼り付け YAML の最大バイト数（過大入力によるリソース枯渇を防ぐ）。
+    webui_max_yaml_bytes: int = 1_000_000
+
+    # Web GUI: 同時に実行できるジョブ数の上限（待機中＋実行中の合計）。
+    webui_max_active_jobs: int = 4
 
 
 settings = Settings()

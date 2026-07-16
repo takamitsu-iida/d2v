@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import re
-import sys
-from pathlib import Path
 
 from d2v.llm import get_llm
 from d2v.llm.base import LLMClient
-
-# prompts/ ディレクトリはプロジェクトルート直下
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+from d2v.prompts import load_prompt
 
 # ```dot ... ``` ブロックを抽出する正規表現
 _DOT_BLOCK_RE = re.compile(r"```dot\s*(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -18,15 +14,6 @@ _DOT_BLOCK_RE = re.compile(r"```dot\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _DIGRAPH_RE = re.compile(r"```[^\n]*\n\s*(digraph\s.*?)```", re.DOTALL)
 # 汎用コードフェンス（```lang\n ... ```）
 _GENERIC_BLOCK_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
-
-
-def _load_prompt(filename: str) -> str:
-    """prompts/ ディレクトリからプロンプトファイルを読み込む。"""
-    path = _PROMPTS_DIR / filename
-    if not path.exists():
-        print(f"\n[エラー] プロンプトファイルが見つかりません: {path}\n", file=sys.stderr)
-        sys.exit(1)
-    return path.read_text(encoding="utf-8")
 
 
 def _strip_code_fences(text: str) -> str:
@@ -109,7 +96,7 @@ def generate(
     Returns:
         Graphviz DOT 形式のコード文字列
     """
-    system_prompt = _load_prompt(system_prompt_file)
+    system_prompt = load_prompt(system_prompt_file)
 
     directive = _completeness_directive(topology_text)
 
