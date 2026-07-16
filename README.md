@@ -47,6 +47,16 @@ sudo apt install graphviz
 絵文字アイコン（🌐 🔀 🔌 🧱 💻）を図に表示するには、絵文字フォントも必要です。
 未インストールだと `01F310` のようなコードポイントの箱で表示されます。
 
+図では、ノードのタイプ（`device-type`）ごとに以下の絵文字アイコンが割り当てられます。
+
+| 絵文字 | ノードタイプ | 説明 |
+|:------:|--------------|------|
+| 🌐 | ルータ | ルータ（`router`） |
+| 🔀 | L3スイッチ | レイヤ3スイッチ（`switch` で L3 相当） |
+| 🔌 | L2スイッチ / アクセススイッチ | レイヤ2・アクセススイッチ |
+| 🧱 | ファイアウォール | ファイアウォール（`firewall`） |
+| 💻 | サーバ / PC端末 | サーバ・PC などの端末（`server` / `pc`） |
+
 ```bash
 # システム全体にインストールする場合
 sudo apt install fonts-noto-color-emoji
@@ -110,6 +120,13 @@ python main.py --input examples/sample_topology_small.yaml
   --split-threshold N         このノード数を超え、かつ zone 情報がある場合に
                               俯瞰図＋ゾーン詳細図へ自動分割（デフォルト: 40）
   --no-split                  自動分割を無効化し、常に 1 枚の図として生成する
+  --focus DEVICE_ID           注目ノード（device-id）から --hops ホップ以内の
+                              ノードだけを抜き出した集中図を 1 枚生成する
+  --hops N                    --focus 指定時に何ホップ先まで含めるか
+                              （1 または 2 を推奨。デフォルト: 1）
+  --zone ZONE [ZONE ...]      指定したゾーンだけを描画対象にした図を 1 枚生成する
+                              （複数指定でまとめて 1 枚。対象外ゾーンへの接続は
+                              境界スタブとして表示）
   --zone-opacity 0.0-1.0      ゾーン（cluster）背景色の不透明度。背景が濃いときに
                               下げると淡くなる（1.0=不透明。デフォルト: 0.4）
 ```
@@ -139,6 +156,63 @@ python main.py -i examples/sample_topology_large.yaml --no-split
 # 分割しきい値を 20 ノードに引き下げ
 python main.py -i examples/sample_topology_large.yaml --split-threshold 20
 ```
+
+### 注目ノード集中図（1〜2 ホップ抽出）
+
+`--focus` に注目したいノードの `device-id` を指定すると、そのノードを中心に
+**物理接続を `--hops` ホップたどって到達できるノードだけ**を抜き出した部分構成図を
+1 枚生成します（このとき自動分割は行われません）。大規模トポロジの中で特定機器の
+周辺だけを素早く把握したいときに便利です。
+
+- 注目ノードは図の中心に強調して配置され、ホップ数が大きいノードほど外側に描かれます。
+- 各ノードには注目ノードからの距離（`N ホップ`）が注記されます。
+- 抽出範囲の外へ続く接続を持つ境界ノードには「この先に N 台の接続あり（省略）」と
+  注記され、図が全体の一部であることが分かります。
+- 範囲内のノードに関連する L3 サブネットも自動抽出されます。
+- **複数の注目ノードを指定**できます（例: `--focus spine-01 spine-02`）。この場合、
+  いずれかの注目ノードから `--hops` ホップ以内に到達できるノードの**和集合**を
+  1 枚のサブグラフとして抽出します。密接に関連する機器をまとめて中心に据えたいときに便利です。
+
+```bash
+# spine-01 から 1 ホップ以内（直接の隣接ノードのみ）
+python main.py -i examples/sample_topology_large.yaml --focus spine-01
+
+# spine-01 から 2 ホップ以内
+python main.py -i examples/sample_topology_large.yaml --focus spine-01 --hops 2
+
+# spine-01 と spine-02 の 2 台を中心に 1 ホップ以内（和集合）
+python main.py -i examples/sample_topology_large.yaml --focus spine-01 spine-02
+```
+
+出力はサブディレクトリ `output/focus-<device-id>-<N>hop/` に生成され、ベスト画像は
+`output/<stem>_focus-<device-id>-<N>hop.png` に集約されます。
+複数指定時は device-id をハイフンで連結した名前になります
+（例: `focus-spine-01-spine-02-1hop`）。
+
+### 指定ゾーンだけを描画（ゾーン限定図）
+
+`--zone` に描画したいゾーン名を指定すると、**そのゾーンに属するノードだけ**を
+描画対象にした図を 1 枚生成します（このとき自動分割は行われません）。特定エリアの
+内部構成だけを詳しく見たいときに便利です。
+
+- 複数のゾーンを指定できます（例: `--zone dc-core dc-fabric`）。指定したゾーンを
+  まとめて 1 枚に描画し、各ゾーンは背景色付きの cluster としてグルーピングされます。
+- 対象外ゾーンへ跨る接続は「外部ゾーン参照ノード（境界スタブ）」として破線で
+  描画され、図が自己完結します。多数の外部デバイスを持つゾーンは 1 ノードに集約されます。
+- 対象ゾーンに関連する L3 サブネットも自動抽出されます。
+
+```bash
+# dc-fabric ゾーンだけを描画
+python main.py -i examples/sample_topology_large.yaml --zone dc-fabric
+
+# dc-core と dc-fabric をまとめて 1 枚に描画
+python main.py -i examples/sample_topology_large.yaml --zone dc-core dc-fabric
+```
+
+出力はサブディレクトリ `output/zone-only-<zone>/` に生成され、ベスト画像は
+`output/<stem>_zone-only-<zone>.png` に集約されます（複数指定時はゾーン名をハイフンで連結）。
+
+> `--focus` と `--zone` は同時には指定できません。
 
 ### 実行例
 
@@ -217,6 +291,16 @@ python main.py -i examples/sample_topology_large.yaml
 
 多数の外部デバイスと接続するゾーン（DC Fabric など）は、他ゾーンへの境界を
 「ゾーン集約ノード」にまとめ、横長になりすぎないよう `rankdir=LR` で縦積みに調整されます。
+
+#### 注目ノード集中図（1 ホップ）
+
+大規模トポロジの中から `spine-01` を中心に、直接つながるノードだけを抜き出した例です。
+
+```bash
+python main.py -i examples/sample_topology_large.yaml --focus spine-01
+```
+
+![spine-01 を中心とした 1 ホップ集中図](images/sample_topology_large_focus-spine-01-1hop.png)
 
 #### スコア推移
 

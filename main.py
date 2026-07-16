@@ -35,6 +35,36 @@ def run_d2v() -> None:
     ap = argparse.ArgumentParser(
         prog="d2v",
         description="iida-network-model YAML からネットワーク構成図を生成します。",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+使い方の例（examples/ に同梱のトポロジを利用）:
+  # 小規模トポロジ（7 ノード）を生成
+  python main.py -i examples/sample_topology_small.yaml
+
+  # 中規模トポロジ（23 ノード）、最大 5 回まで改善
+  python main.py -i examples/sample_topology_medium.yaml -n 5
+
+  # 大規模トポロジ（73 ノード）、zone 単位で俯瞰図＋詳細図に自動分割
+  python main.py -i examples/sample_topology_large.yaml
+
+  # 自動分割を無効化して 1 枚で生成
+  python main.py -i examples/sample_topology_large.yaml --no-split
+
+  # spine-01 を中心に 2 ホップ以内のノードだけを集中図として抽出
+  python main.py -i examples/sample_topology_large.yaml --focus spine-01 --hops 2
+
+  # spine-01 と spine-02 の 2 台を中心に 1 ホップ以内（和集合）を抽出
+  python main.py -i examples/sample_topology_large.yaml --focus spine-01 spine-02
+
+  # 指定したゾーンだけを描画対象にする（複数指定でまとめて 1 枚）
+  python main.py -i examples/sample_topology_large.yaml --zone dc-core dc-fabric
+
+  # SVG で出力、合格スコア閾値を 9 点に設定
+  python main.py -i examples/sample_topology_small.yaml -f svg -t 9
+
+  # 画像からトポロジ YAML を生成（v2d サブコマンド）
+  python main.py v2d -i images/sample_topology_small_best.png
+""",
     )
     ap.add_argument(
         "--input", "-i",
@@ -96,6 +126,38 @@ def run_d2v() -> None:
         help="自動分割を無効化し、常に 1 枚の図として生成する",
     )
     ap.add_argument(
+        "--focus",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="DEVICE_ID",
+        help=(
+            "注目ノード（device-id）を指定すると、そのノードから --hops ホップ以内の"
+            "ノードだけを抜き出した集中図を 1 枚生成する（分割は行わない）。"
+            "複数指定（例: --focus spine-01 spine-02）すると、いずれかのノードから"
+            "到達できる範囲の和集合を 1 枚のサブグラフとして抽出する"
+        ),
+    )
+    ap.add_argument(
+        "--hops",
+        type=int,
+        default=1,
+        metavar="N",
+        help="--focus 指定時に注目ノードから何ホップ先まで含めるか（1 または 2 を推奨。デフォルト: 1）",
+    )
+    ap.add_argument(
+        "--zone",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="ZONE",
+        help=(
+            "指定したゾーンだけを描画対象にした図を 1 枚生成する（分割は行わない）。"
+            "複数指定（例: --zone dc-core dc-fabric）するとまとめて 1 枚に描画する。"
+            "対象外ゾーンへ跨る接続は境界スタブとして表示される"
+        ),
+    )
+    ap.add_argument(
         "--zone-opacity",
         type=float,
         default=0.4,
@@ -105,6 +167,10 @@ def run_d2v() -> None:
             "（1.0=不透明、例: 0.4でかなり淡く。デフォルト: 0.4）"
         ),
     )
+    # 引数なしで実行された場合はエラーにせずヘルプを表示して終了する
+    if len(sys.argv) == 1:
+        ap.print_help()
+        return
     args = ap.parse_args()
 
     console.print(Panel(
@@ -128,6 +194,20 @@ def run_d2v() -> None:
     )
     console.print(topology_text)
 
+    # ── 注目ノード集中図モード / ゾーン限定モード ─────────────────
+    if args.focus is not None and args.zone is not None:
+        console.print(
+            "\n[bold red]✗ --focus と --zone は同時に指定できません。"
+            "どちらか一方を指定してください。[/bold red]\n"
+        )
+        sys.exit(1)
+    if args.focus is not None:
+        _run_focus(args, model)
+        return
+    if args.zone is not None:
+        _run_zone(args, model)
+        return
+
     # ── 分割計画の判定 ────────────────────────────────────────────
     diagrams = None if args.no_split else partitioner.plan(model, args.split_threshold)
 
@@ -135,6 +215,115 @@ def run_d2v() -> None:
         _run_single(args, topology_text)
     else:
         _run_split(args, diagrams)
+
+
+def _run_zone(args: argparse.Namespace, model: "parser.TopologyModel") -> None:
+    """指定したゾーンだけを描画対象にした図を 1 枚生成する。"""
+    # 存在しないゾーンを検出して分かりやすくエラー表示する
+    known = partitioner.available_zones(model)
+    missing = [z for z in args.zone if z not in known]
+    if missing:
+        available = ", ".join(known) or "(なし)"
+        console.print(
+            f"\n[bold red]✗ ゾーン {', '.join(missing)} "
+            "がトポロジに存在しません。[/bold red]\n"
+            f"[dim]利用可能なゾーン: {available}[/dim]\n"
+        )
+        sys.exit(1)
+
+    diagram = partitioner.zone_plan(model, args.zone)
+    if diagram is None:
+        console.print("\n[bold red]✗ ゾーン限定図を生成できませんでした。[/bold red]\n")
+        sys.exit(1)
+
+    console.print(Rule(f"[bold]Step 2  {diagram.title}[/bold]"))
+    console.print(diagram.text)
+
+    sub_stem = f"{args.input.stem}_{diagram.key}"
+    result = pipeline.run(
+        topology_text=diagram.text,
+        output_dir=args.output_dir / diagram.key,
+        stem=sub_stem,
+        fmt=args.format,
+        max_iterations=args.max_iter,
+        threshold=args.threshold,
+        patience=args.patience,
+        zone_opacity=args.zone_opacity,
+    )
+
+    # ベスト画像を出力ルートへ集約
+    final_path = args.output_dir / f"{sub_stem}.{args.format}"
+    shutil.copy2(result.best_image, final_path)
+
+    best = result.best_result
+    score_color = (
+        "green" if best.score >= args.threshold
+        else "yellow" if best.score >= 6
+        else "red"
+    )
+    console.print(Panel(
+        f"最終スコア       : [{score_color}]{best.score}/10[/{score_color}]\n"
+        f"イテレーション数 : {result.total_iterations}/{args.max_iter}\n"
+        f"出力ファイル     : [bold]{final_path}[/bold]",
+        title="[bold green]✓ 完了[/bold green]",
+        expand=False,
+    ))
+
+
+def _run_focus(args: argparse.Namespace, model: "parser.TopologyModel") -> None:
+    """注目ノード（1 台以上）から --hops ホップ以内の集中図を 1 枚生成する。"""
+    if args.hops < 1:
+        console.print("\n[bold red]✗ --hops は 1 以上を指定してください。[/bold red]\n")
+        sys.exit(1)
+
+    # 存在しない注目ノードを検出して分かりやすくエラー表示する
+    missing = [fid for fid in args.focus if fid not in model.device_map]
+    if missing:
+        available = ", ".join(sorted(model.device_map)) or "(なし)"
+        console.print(
+            f"\n[bold red]✗ 注目ノード {', '.join(missing)} "
+            "がトポロジに存在しません。[/bold red]\n"
+            f"[dim]利用可能な device-id: {available}[/dim]\n"
+        )
+        sys.exit(1)
+
+    diagram = partitioner.focus_plan(model, args.focus, args.hops)
+    if diagram is None:
+        console.print("\n[bold red]✗ 集中図を生成できませんでした。[/bold red]\n")
+        sys.exit(1)
+
+    console.print(Rule(f"[bold]Step 2  {diagram.title}[/bold]"))
+    console.print(diagram.text)
+
+    sub_stem = f"{args.input.stem}_{diagram.key}"
+    result = pipeline.run(
+        topology_text=diagram.text,
+        output_dir=args.output_dir / diagram.key,
+        stem=sub_stem,
+        fmt=args.format,
+        max_iterations=args.max_iter,
+        threshold=args.threshold,
+        patience=args.patience,
+        zone_opacity=args.zone_opacity,
+    )
+
+    # ベスト画像を出力ルートへ集約
+    final_path = args.output_dir / f"{sub_stem}.{args.format}"
+    shutil.copy2(result.best_image, final_path)
+
+    best = result.best_result
+    score_color = (
+        "green" if best.score >= args.threshold
+        else "yellow" if best.score >= 6
+        else "red"
+    )
+    console.print(Panel(
+        f"最終スコア       : [{score_color}]{best.score}/10[/{score_color}]\n"
+        f"イテレーション数 : {result.total_iterations}/{args.max_iter}\n"
+        f"出力ファイル     : [bold]{final_path}[/bold]",
+        title="[bold green]✓ 完了[/bold green]",
+        expand=False,
+    ))
 
 
 def _run_single(args: argparse.Namespace, topology_text: str) -> None:
