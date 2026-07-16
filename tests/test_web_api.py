@@ -213,3 +213,72 @@ def test_v2d_lifecycle(monkeypatch):
     assert client.get(f"/api/jobs/{job_id}/v2d/original").status_code == 200
     # 再描画は未実施なので 404
     assert client.get(f"/api/jobs/{job_id}/v2d/rerender").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# セマンティック検証 API（/api/validate）— LLM 不要で同期実行
+# ---------------------------------------------------------------------------
+
+
+def test_validate_example_ok():
+    r = client.post("/api/validate", json={
+        "source": "example", "example": "sample_topology_small.yaml",
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True           # 構造 error なし
+    assert data["counts"]["error"] == 0
+    assert data["explain_error"] is None
+    # 非冗長ツリーのため SPOF/橋の warning がある
+    assert data["counts"]["warning"] > 0
+    rules = {i["rule"] for i in data["issues"]}
+    assert "spof-device" in rules
+
+
+def test_validate_text_with_errors():
+    broken = (
+        "network-model:\n"
+        "  physical-layer:\n"
+        "    device:\n"
+        "      - device-id: a\n"
+        "      - device-id: a\n"           # 重複
+        "    physical-connection:\n"
+        "      - connection-id: c1\n"
+        "        endpoint:\n"
+        "          - device-id: a\n"
+        "            interface-id: g0\n"
+        "          - device-id: ghost\n"   # 未定義参照
+        "            interface-id: g0\n"
+    )
+    r = client.post("/api/validate", json={"source": "text", "yaml_text": broken})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert data["passed"] is False
+    rules = {i["rule"] for i in data["issues"]}
+    assert "duplicate-device-id" in rules
+    assert "unknown-device-ref" in rules
+
+
+def test_validate_strict_fails_on_warning():
+    r = client.post("/api/validate", json={
+        "source": "example", "example": "sample_topology_small.yaml",
+        "strict": True,
+    })
+    data = r.json()
+    assert data["ok"] is True          # error はない
+    assert data["passed"] is False     # strict では warning で不合格
+
+
+def test_validate_bad_yaml_returns_400():
+    r = client.post("/api/validate", json={
+        "source": "text", "yaml_text": "not-a-network-model: true\n",
+    })
+    assert r.status_code == 400
+
+
+def test_validate_example_traversal_blocked():
+    r = client.post("/api/validate", json={
+        "source": "example", "example": "../pyproject.toml",
+    })
+    assert r.status_code == 400

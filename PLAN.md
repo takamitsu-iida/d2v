@@ -1019,3 +1019,476 @@ src/d2v/web/
 - [x] `pipeline.run` に `progress_callback` を追加し CLI を `service.py` 経由へ寄せる
 - [x] SSE で 1 ジョブぶんの進捗が流れる最小経路を通す
 - [x] d2v フォーム（サンプル選択→実行→画像表示）を最小構成で成立させる
+
+
+<br><br><br>
+
+---
+
+<br><br><br>
+
+
+# validate (セマンティック検証 / design lint) 実装計画
+
+## 目的
+
+`parser` が担う **YANG スキーマ検証**（必須フィールドの有無・型）を超えて、
+トポロジ **設計そのものの論理的妥当性**をルールベースで機械検証し、
+検出した問題を LLM が「なぜ問題か・どう直すか」の自然言語で補足する
+**セマンティック検証（design lint）レイヤー**を追加する。
+
+図の見やすさ（`evaluator` が担当）とは対象が異なり、
+こちらは **YAML の内容（設計）が正しいか**を検証する。d2v の作図・v2d の抽出いずれの
+入り口から来た YAML にも適用でき、作図前の事前チェックとしても機能する。
+
+```
+YAML (iida-network-model)
+        │
+        ▼
+   parser.load_model()          ← スキーマ検証（既存）
+        │  TopologyModel
+        ▼
+   validator.validate()         ← セマンティック検証（本計画）
+        │  ・構造整合性（宙ぶらりんリンク/未定義参照/重複）
+        │  ・一意性（device-id/ASN/loopback/IP 重複・重なり）
+        │  ・到達性/冗長性（孤立ノード/SPOF/冗長経路欠如）
+        │  ・L3 整合性（interface IP と ip-subnet の整合）
+        │  ・ポリシー制約（任意・宣言的ルール）
+        ▼
+   ValidationReport (issues[])
+        │  --explain 時のみ
+        ▼
+   validator.explain()          ← LLM が理由・修正案を付与
+```
+
+---
+
+## 設計方針
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| 検証エンジン | **純 Python ルールベース**（LLM 非依存） | 決定論的・高速・API キー不要。CI やコミット前フックでも回せる |
+| LLM の役割 | **説明・修正案の付与のみ**（`--explain` 時） | 検出は機械で確定させ、LLM は非決定的な「解説」に限定して誤検出を防ぐ |
+| 入力 | `parser.load_model()` の `TopologyModel` | 既存パーサ資産を再利用し、作図・v2d と同じモデルを検証 |
+| 重大度 | `error` / `warning` / `info` の 3 段階 | 「設計ミス」と「要確認」を区別。終了コード/CI ゲートに使う |
+| グラフ解析 | 隣接リストを内製（外部依存なし）で連結性・関節点を判定 | `networkx` を持ち込まず軽量に保つ（partitioner と同方針） |
+| 出力 | `ValidationReport`（Pydantic）＋ JSON ＋ rich テキスト | 機械可読（AI/CI 向け）と人間可読の両立 |
+| 例外方針 | ライブラリ層は `errors.D2VError` 系を送出、UI 層が終了方法を決定 | 既存の parser/evaluator と同一規約 |
+
+---
+
+## ディレクトリ構成（目標）
+
+```
+src/d2v/
+├── validator.py            # 本体（ルール群 + ValidationReport + explain）
+└── errors.py               # ValidationError（設計上の致命的違反用・任意）
+
+prompts/
+└── design-lint.md          # --explain 用：issue 群 → 理由/修正案の LLM プロンプト
+
+tests/
+└── test_validator.py       # ルール単体テスト（LLM 不要）
+```
+
+> 単一モジュール `validator.py` に集約する（`evaluator.py` と同じ粒度）。
+> ルールが増えて肥大化した場合のみ `src/d2v/validate/` パッケージへ分割する。
+
+---
+
+## データモデル（案）
+
+```python
+class ValidationIssue(BaseModel):
+    rule: str            # ルール ID（例: "dangling-endpoint", "spof-device"）
+    severity: str        # "error" | "warning" | "info"
+    message: str         # 機械生成の簡潔な説明
+    targets: list[str]   # 関係する device-id / connection-id / subnet-id
+    explanation: str = ""  # LLM が付与（--explain 時のみ）
+    suggestion: str = ""   # LLM が付与（--explain 時のみ）
+
+class ValidationReport(BaseModel):
+    ok: bool                       # error が 0 件か
+    counts: dict[str, int]         # {"error": n, "warning": m, "info": k}
+    issues: list[ValidationIssue]
+```
+
+---
+
+## 検証ルール（初期セット）
+
+| ルール ID | 重大度 | 内容 |
+|-----------|:------:|------|
+| `dangling-endpoint` | error | `physical-connection.endpoint` が 2 要素でない／片側のみ定義 |
+| `unknown-device-ref` | error | endpoint が存在しない `device-id` を参照 |
+| `unknown-interface-ref` | error | endpoint が device に無い `interface-id` を参照 |
+| `duplicate-device-id` | error | `device-id` の重複 |
+| `duplicate-connection` | warning | 同一ノード・ポート対の重複リンク（無向・ポート込み） |
+| `self-loop` | error | 両 endpoint が同一 device の自己ループ |
+| `duplicate-loopback` | error | 複数 device で同一 `loopback` |
+| `duplicate-asn` | info | 同一 `asn` を複数 device が使用（eBGP 設計では要確認・iBGP では正常） |
+| `ip-address-overlap` | error | 異なるインターフェースで同一/重複する `ip-address` |
+| `subnet-overlap` | warning | `ip-subnet.prefix` 同士の CIDR 重なり |
+| `iface-subnet-mismatch` | warning | interface の `ip-address` がどの `ip-subnet.prefix` にも属さない |
+| `p2p-mask-mismatch` | info | /30・/31 リンクの両端 IP がプレフィックス不整合 |
+| `isolated-device` | warning | どの physical-connection にも現れない孤立ノード |
+| `spof-device` | warning | グラフの関節点（cut vertex）— 単一障害点になり得る機器 |
+| `spof-bridge-link` | warning | 橋（bridge edge）— 落ちると分断されるリンク |
+| `no-redundant-path` | info | 特定ノード対（core↔外部等）に冗長経路が無い |
+| `zone-policy-violation` | error/warning | 宣言済みゾーン間ポリシーへの違反（任意・Phase 3） |
+
+> CIDR 重なり・所属判定は標準ライブラリ `ipaddress` で実装（追加依存なし）。
+> SPOF/bridge は DFS ベースの関節点・橋検出（Tarjan）を内製する。
+
+---
+
+## 実装フェーズ
+
+### Phase 0: 基盤とデータモデル
+**目標**: `validator` の骨格とレポート型を用意し、CLI から空実行できる。
+
+- [x] `src/d2v/validator.py` に `ValidationIssue` / `ValidationReport`（Pydantic）を定義
+- [x] `validate(model: TopologyModel, *, policies=None) -> ValidationReport` の枠を実装（ルールは空）
+- [ ] `errors.py` に必要なら `ValidationError`（致命的違反用・任意）を追加 → 現状 `validate()` は例外を送出せずレポートを返す設計のため**見送り**（必要になった Phase で追加）
+- [x] rich でのレポート整形（重大度別カラー・件数サマリ）ヘルパ
+
+**完了の定義**: `validate(model)` が空の `ValidationReport(ok=True)` を返し、整形表示できる。✅
+
+**実装（2026-07-16）**
+- `src/d2v/validator.py`（新規）: `ValidationIssue`（rule/severity/targets/message＋LLM 用 explanation/suggestion）と `ValidationReport`（ok/counts/issues）を Pydantic 定義。`ValidationReport.from_issues()` で件数集計と `ok`（error 0 件）判定を一元化。
+- ルール登録機構: `@rule` デコレータで検証関数（`TopologyModel -> list[ValidationIssue]`）を `_RULES` に登録し、`validate()` が登録順に全ルールを実行して集約。Phase 0 ではルール未登録のため空レポートを返す。Phase 1 以降は `@rule` を付けるだけで拡張できる。
+- 重大度は `error`/`warning`/`info` の固定 3 段階（`SEVERITIES`）。検出は決定論的（LLM 非依存）で、`explanation`/`suggestion` は Phase 4 の `--explain` 用に予約。
+- rich 整形 `render_report()`: 問題なしは緑の 1 行、問題ありは重大度別カラーの件数サマリ＋テーブル（重大度/ルール/内容/対象）を返す renderable。
+- `errors.py` の `ValidationError` は上記理由で見送り。
+- `tests/test_validator.py`（新規, 6 件）: 空モデルで `ok=True`・件数集計/ok 判定・`@rule` 登録と実行・`render_report` の空/issue 表示を検証。`python -m pytest tests/ -q` → **80 passed**（既存 74 + validator 6）。
+
+---
+
+### Phase 1: 構造整合性・一意性ルール
+**目標**: LLM 不要で確実に検出できる「壊れた参照・重複」を実装する。
+
+- [x] `dangling-endpoint` / `unknown-device-ref` / `unknown-interface-ref` / `self-loop`
+- [x] `duplicate-device-id` / `duplicate-connection` / `duplicate-loopback` / `duplicate-asn`
+- [x] `ip-address-overlap`（`ipaddress` で正規化して比較）
+- [x] 各ルールの単体テスト（正常系＋違反系）
+
+**完了の定義**: 破損参照・重複を持つサンプルで対応 issue が過不足なく検出される。✅
+
+**実装（2026-07-16）**
+- `src/d2v/validator.py` に Phase 1 の 9 ルールを `@rule` 登録で追加（決定論・LLM 非依存）:
+  - 構造整合性: `dangling-endpoint`（端点数≠2／device-id 欠落・error）, `unknown-device-ref`（未定義 device 参照・error）, `unknown-interface-ref`（device に無い interface 参照・error）, `self-loop`（両端同一・error）
+  - 一意性: `duplicate-device-id`（error）, `duplicate-connection`（無向・ポート込みキーで重複判定・warning）, `duplicate-loopback`（IP 正規化して比較・error）, `duplicate-asn`（共有は iBGP 正常/eBGP 要確認・info）, `ip-address-overlap`（ホスト IP 正規化で衝突検出・error）
+  - 補助関数: `_conn_target`（connection-id 優先の識別子）, `_iface_ids`, `_edge_key`（無向・ポート込み `frozenset` キー）, `_norm_ip`（`ipaddress.ip_interface` でホスト部正規化・解析不能は None）。追加依存なし（標準 `ipaddress`）。
+  - 設計判断: 重複リンク判定は**ポート込み**のため、別ポートの並行リンク（LAG）は誤検出しない。loopback/IP は表記差（マスク違い等）を正規化で吸収。
+- `tests/test_validator.py` に Phase 1 テスト 13 件を追加（正常トポロジで 0 件、各違反の検出、LAG 非検出、表記差の重複検出、info のみは `ok=True` 等）。
+- 検証: 実サンプル 3 件（small/medium/large）で**誤検出ゼロ**（すべて「問題なし」）を確認。`python -m pytest tests/ -q` → **93 passed**（既存 80 + Phase 1 13）。
+
+---
+
+### Phase 2: L3 整合性・到達性・冗長性
+**目標**: IP 整合とグラフ構造（孤立/SPOF/冗長）を検証する。
+
+- [x] `subnet-overlap` / `iface-subnet-mismatch` / `p2p-mask-mismatch`（`ipaddress` 利用）
+- [x] physical-connection から無向グラフ（隣接リスト）を構築するヘルパ
+- [x] `isolated-device`（次数 0 の検出）
+- [x] `spof-device` / `spof-bridge-link`（Tarjan の関節点・橋検出を内製）
+- [ ] `no-redundant-path`（指定ノード対の 2 経路存在チェック・任意）→ ノード対の指定が必要なため **Phase 3（ポリシー）へ移送**。SPOF/橋の検出で冗長欠如は概ねカバー済み
+- [x] グラフ系ルールの単体テスト（線形/冗長/分断トポロジ）
+
+**完了の定義**: 冗長のない構成で SPOF・橋が、冗長構成では検出されないことを確認できる。✅
+
+**実装（2026-07-16）**
+- `src/d2v/validator.py` に Phase 2 の 6 ルールを追加（決定論・追加依存なし＝標準 `ipaddress`）:
+  - L3 整合性: `subnet-overlap`（prefix 同士の CIDR 重なり・warning）, `iface-subnet-mismatch`（interface IP がどの ip-subnet にも属さない・warning／サブネット未宣言時はスキップ）, `p2p-mask-mismatch`（両端 /30・/31 の P2P リンクで別ネットワーク・info）
+  - 到達性・冗長性: `isolated-device`（次数 0・warning）, `spof-device`（関節点＝cut vertex・warning）, `spof-bridge-link`（橋＝bridge edge・warning／並行リンク LAG は冗長として除外）
+  - グラフ解析ヘルパ（外部依存なし）: `_build_graph`（physical-connection→無向隣接リスト。自己ループ/未定義参照/端点数≠2 は無視）, `_articulation_and_bridges`（Tarjan/DFS で関節点・橋を一括算出）, `_pair_multiplicity`（デバイス対の接続本数＝LAG 判定）, `_iface_ip`。
+  - 設計判断: `spof-bridge-link` は並行リンク（LAG, 多重度>1）を橋から除外し冗長を誤検出しない。`iface-subnet-mismatch` はサブネット宣言がある場合のみ動作。`no-redundant-path` はノード対指定が要るため Phase 3 へ移送。
+- `tests/test_validator.py` に Phase 2 テスト 10 件を追加（`_chain`/`_ring` ヘルパで線形＝SPOF/橋あり・環状＝なし、subnet 重複、iface 不一致とスキップ、P2P 一致/不一致、孤立、LAG は橋でない）。Phase 1 の「正常トポロジ」テストは 2 ノード単一リンクが正しく橋になるため、冗長な 3 ノードリングへ更新。
+- 検証: small サンプルで非冗長ツリーの SPOF 4 台・橋 6 本・外部リンクの iface-subnet-mismatch を**すべて真陽性**として検出（error=0）。冗長リングでは SPOF/橋ゼロ。`python -m pytest tests/ -q` → **102 passed**（既存 93 + Phase 2 9 純増）。
+
+---
+
+### Phase 3: ポリシー制約（宣言的ルール・任意）
+**目標**: 社内設計標準を機械可読にし、違反を検証する。
+
+- [x] ゾーン間通信ポリシーの記法を定義（例: `server → external は firewall 経由必須`）
+- [x] ポリシーファイル（YAML）読み込みと `zone-policy-violation` 判定
+- [x] 「core は必ず冗長」等のゾーン単位冗長ポリシー
+- [x] ポリシー検証の単体テスト
+
+**完了の定義**: サンプルポリシーに反する構成で違反が、準拠構成では検出されない。✅
+
+**実装（2026-07-16）**
+- `src/d2v/validator.py` にポリシー機構を追加（追加依存なし）:
+  - モデル: `NodeSelector`（`zone`/`type`＝device-type の AND、または文字列 `any`＝zone かデバイス種別のいずれか一致）, `ZoneTransitPolicy`（src→dst は via 経由必須）, `ZoneRedundancyPolicy`（対象は冗長であること）, `PolicySet`。
+  - `load_policies(path)`: ポリシー YAML（`zone-transit` の from/to/via・`zone-redundancy` の zone/type）を読み込み `PolicySet` を返す（不正キー/破損は `InputError`）。
+  - 検証: `_check_zone_transit`（via ノードを除いたグラフで src→dst が到達可能なら**迂回経路あり**として `zone-policy-violation`）, `_check_zone_redundancy`（対象が関節点／橋の端点なら `zone-redundancy-violation`。LAG は冗長として除外）。BFS ヘルパ `_reachable_from`、Phase 2 のグラフ解析を再利用。
+  - `validate(model, *, policies=PolicySet|None)` を拡張し、登録ルールに続けてポリシーを実行。
+- `examples/sample_policy.yaml`（新規）: サンプルポリシー（dmz→office は firewall 経由必須・core は冗長）。
+- 設計判断: `no-redundant-path`（Phase 2 から移送）はゾーン冗長ポリシー（`zone-redundancy`）として汎用化して実現。通信ポリシーの rule id は `zone-policy-violation`、冗長ポリシーは `zone-redundancy-violation` に分離し filter しやすくした。
+- `tests/test_validator.py` に Phase 3 テスト 8 件（セレクタ一致、via 経由のみ＝準拠・迂回あり＝違反、直鎖 core＝違反・リング core＝準拠、YAML ロード/空ファイル）。`_dev` に `dtype` 引数を追加。
+- 検証: small トポロジ＋`sample_policy.yaml` で、dmz→office は firewall 経由のみのため**通信ポリシー準拠**、core-sw-01 は関節点のため**冗長ポリシー違反**を検出。`python -m pytest tests/ -q` → **110 passed**（既存 102 + Phase 3 8）。
+
+---
+
+### Phase 4: LLM 説明・修正案（--explain）
+**目標**: 検出済み issue に理由と具体的修正案を付与する。
+
+- [x] `prompts/design-lint.md`（issue 群＋トポロジ要約 → 各 issue の理由/修正案 JSON）
+- [x] `validator.explain(report, model, llm) -> ValidationReport`（`explanation`/`suggestion` を充填）
+- [x] LLM が捏造した issue を追加しない（機械検出を正・LLM は付与のみ）ガード
+- [x] LLM をモックした経路テスト
+
+**完了の定義**: `--explain` で各 issue に日本語の理由・修正案が付き、issue 集合は不変。✅
+
+**実装（2026-07-16）**
+- `prompts/design-lint.md`（新規）: 検出済み issue（index/rule/severity/message/targets の JSON）＋トポロジ要約を受け取り、**各 index に 1 対 1 で** `explanation`/`suggestion` を返す抽出プロンプト。新規 issue 追加・severity/rule 変更・捏造を明確に禁止。
+- `src/d2v/validator.py` に `explain(report, model, llm=None) -> ValidationReport` を実装:
+  - issue を JSON 化＋`parser.build_text` のトポロジ文脈を添えて LLM に渡し、`index → (explanation, suggestion)` を回収して充填。
+  - **捏造ガード**: 既存 issue の index に一致する説明のみ適用。範囲外 index・非 int・型不正は無視し、**issue 集合（rule/severity/message/targets・件数・ok）は不変**。応答が壊れていれば説明なしで元の issue を保持（`_extract_json_array`/`_parse_explanations` が JSON 抽出失敗を握りつぶし、機械検出結果を壊さない）。
+  - LLM は遅延 import（`get_llm`）。空レポートは LLM を呼ばず即返し。
+- `render_report` を拡張し、`explain` 済みのとき テーブル下に「詳細（--explain）」として rule/対象・理由・修正案を追記（説明が無い通常表示は不変）。
+- `tests/test_validator.py` に Phase 4 テスト 5 件（`_FakeLLM` モックで充填・**捏造 index 無視**・壊れた JSON で不変・空レポートは LLM 未呼び出し・render の詳細表示）。
+- 検証: `python -m pytest tests/ -q` → **115 passed**（既存 110 + Phase 4 5）。API キー不要（LLM はモック）。
+
+---
+
+### Phase 5: CLI・Web・テスト統合
+**目標**: CLI/GUI から検証を実行でき、作図前チェックにも組み込む。
+
+- [x] `main.py` に `validate` サブコマンド（`python main.py validate -i topology.yaml [--explain] [--policy p.yaml] [--json]`）
+- [x] 終了コード規約（error>0 で 1、warning のみは 0＋警告表示。`--strict` で warning も 1）
+- [x] `d2v` 実行時の任意事前検証フック（`--precheck` で error があれば作図前に停止）
+- [x] Web: `POST /api/validate`（YAML/サンプル/アップロード）＋結果パネル（重大度別・explain）
+- [x] `tests/test_validator.py` と Web API テストを追加
+
+**完了の定義**: CLI/GUI で検証でき、`pytest` が緑。作図前チェックとして使える。✅
+
+**実装（2026-07-16）**
+- `ValidationReport.passed(strict=False)` を追加（error>0 で不合格・strict では warning も不合格）。CLI/Web の終了・合否判定を一元化。
+- CLI: `main.py` に `validate` サブコマンド分岐と `run_validate()` を追加（`-i/--input`・`--policy`・`--explain`・`--json`・`--strict`）。rich 表示または `--json`、終了コードは `report.passed(strict=...)` に従う。`run_d2v()` に `--precheck` を追加し、作図前に `validator.validate` を実行して error があれば作図せず `exit(1)`。既存 d2v/v2d/serve CLI は不変。
+- Web: `POST /api/validate`（source=example/text、`strict`/`explain`）を**同期**追加（検証は LLM 不要で高速なためジョブ化しない）。`explain=True` のときのみ LLM で説明を付与し、失敗しても `explain_error` を添えて**検証結果は必ず返す**。`_read_yaml_source` に入力解決を共通化（パストラバーサル・サイズ検証つき）。`get_meta` の examples 一覧から**ポリシーファイルを除外**（`sample_policy.yaml` がトポロジ選択に混ざらないよう修正）。
+- GUI: SPA に「検証: design lint」タブを追加（`index.html`/`app.js`/`style.css`）。サンプル/貼り付け・strict/explain・重大度別カラーの結果テーブル・`--explain` 詳細・合否バッジ・エラー表示。統合ブラウザで large サンプルを検証し「合格 (error 0 / warning 54 / info 0)」＋テーブル描画を確認。
+- テスト: `tests/test_validator.py` に `passed()` の strict 判定、`tests/test_web_api.py` に `/api/validate` 6 件（正常・text の error 検出・strict 不合格・不正 YAML 400・パストラバーサル 400）を追加。
+- 検証: CLI で strict=1・error=1・warning のみ=0 の終了コード、GUI 実機動作を確認。`python -m pytest tests/ -q` → **121 passed**（既存 115 + Phase 5 6）。
+
+---
+
+## 技術的決定事項（validate）
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| 追加依存 | **なし**（標準 `ipaddress` + 内製グラフ解析） | 軽量・CI で回しやすい。partitioner と同じく外部グラフ依存を避ける |
+| 検出/説明の分離 | 検出＝機械（確定）／説明＝LLM（任意） | 誤検出・捏造を防ぎ、キー無しでも中核機能が動く |
+| モデル共有 | `parser.TopologyModel` を入力に統一 | 作図・v2d・検証で同一モデルを使い回す |
+
+## リスクと対策（validate）
+
+- **誤検出（意図的な iBGP 同一 ASN 等）** → 重大度を info/warning に段階化し `--strict` で制御
+- **大規模での SPOF 計算コスト** → Tarjan は線形（O(V+E)）で実装、必要なら対象を限定
+- **ポリシー記法の複雑化** → Phase 3 は任意。まずは単純な zone 間ルールに限定
+
+## マイルストーン（validate）
+
+### V1: 骨格 — [x] `validate()` が空レポートを返す（Phase 0）
+### V2: 構造/一意性 — [x] 破損参照・重複を検出（Phase 1）
+### V3: L3/グラフ — [x] SPOF・孤立・IP 整合を検出（Phase 2）
+### V4: 説明 — [x] `--explain` で理由/修正案（Phase 4）
+### V5: 統合 — [x] CLI/GUI・事前チェック・テスト（Phase 5）
+
+> ポリシー制約（Phase 3）も完了。**validate は全フェーズ完了**。
+
+## 直近の次アクション（validate）
+
+- [x] `ValidationIssue` / `ValidationReport` を定義し `validate()` 骨格を通す
+- [x] Phase 1 の構造整合性ルールとテストを最優先で実装
+- [x] 内製グラフ解析（隣接リスト＋Tarjan）ヘルパを用意
+- [x] `main.py validate` サブコマンドで rich レポートを表示
+
+
+<br><br><br>
+
+---
+
+<br><br><br>
+
+
+# diff (意味的 diff + 図の差分ハイライト) 実装計画
+
+## 目的
+
+2 つのトポロジ YAML（変更前 / 変更後）の**構造的な差分**を検出し、
+以下 2 つの形で提示する:
+
+1. **意味的 diff（AI/機械可読）**: 行 diff ではなく「spine-03 を追加し leaf 全台に接続」
+   のような**構造変化**として要約（`TopologyDiff` JSON ＋ LLM 自然言語サマリ）。
+2. **図の差分ハイライト（人間向け）**: 追加=緑・削除=赤・変更=橙で色分けした
+   **差分図**を `renderer` 拡張で描画。
+
+ネットワーク設計は「変更の連続」であり、変更レビュー・影響把握の中核機能となる。
+将来的な影響分析（blast radius）の土台にもなる。
+
+```
+before.yaml ──▶ parser.load_model() ──┐
+                                       ├──▶ diff.compare() ──▶ TopologyDiff
+after.yaml  ──▶ parser.load_model() ──┘         │
+                                                ├──▶ diff.summarize()  ← LLM 自然言語要約（任意）
+                                                └──▶ diff.render_diff() ← 差分ハイライト図（union グラフ）
+                                                            add=緑 / del=赤 / change=橙
+```
+
+---
+
+## 設計方針
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| 比較単位 | `parser.TopologyModel`（device/connection/subnet） | 行ではなく**構造**で比較し、整形差やキー順に影響されない |
+| マッチング | `device-id` / `connection-id`（無ければ endpoint 対）/ `subnet-id` を安定キーに | 同一実体を追跡し、属性変更を「change」として検出 |
+| 差分計算 | **純 Python・決定論的**（LLM 非依存） | 差分の正しさは機械で確定。LLM は要約のみ |
+| LLM の役割 | **自然言語サマリのみ**（任意） | 「何がどう変わったか」を人間向けに言語化 |
+| 図の描画 | `renderer` を拡張し**和集合グラフ**を色分け描画 | 変更前後を 1 枚に重ね、追加/削除/変更を一目で把握 |
+| 出力 | `TopologyDiff`（Pydantic）＋ JSON ＋差分 PNG/SVG＋テキスト要約 | 機械可読と人間可読の両立 |
+| 例外方針 | ライブラリ層は `errors.D2VError` 系、UI 層が終了方法を決定 | 既存規約に準拠 |
+
+---
+
+## ディレクトリ構成（目標）
+
+```
+src/d2v/
+├── diff.py                 # 構造 diff（TopologyDiff）+ 要約 + 差分 DOT 生成
+└── renderer.py             # 差分ハイライト描画の拡張（既存を拡張）
+
+prompts/
+└── diagram-diff.md         # TopologyDiff → 自然言語サマリの LLM プロンプト
+
+tests/
+└── test_diff.py            # 構造 diff の単体テスト（LLM 不要）
+```
+
+---
+
+## データモデル（案）
+
+```python
+class AttrChange(BaseModel):
+    field: str          # 変更フィールド（例: "zone", "loopback", "device-type"）
+    before: str | None
+    after: str | None
+
+class NodeChange(BaseModel):
+    device_id: str
+    changes: list[AttrChange]
+
+class TopologyDiff(BaseModel):
+    nodes_added:   list[str]         # device-id
+    nodes_removed: list[str]
+    nodes_changed: list[NodeChange]
+    edges_added:   list[str]         # connection-id / "a:if <-> b:if"
+    edges_removed: list[str]
+    zones_added:   list[str]
+    zones_removed: list[str]
+    subnets_added: list[str]
+    subnets_removed: list[str]
+    summary: str = ""                # LLM 要約（任意）
+    def is_empty(self) -> bool: ...  # 変更なし判定
+```
+
+---
+
+## 実装フェーズ
+
+### Phase 0: 構造 diff エンジン
+**目標**: 2 つの `TopologyModel` から `TopologyDiff` を決定論的に算出する。
+
+- [ ] `src/d2v/diff.py` に上記 Pydantic モデルを定義
+- [ ] `compare(before: TopologyModel, after: TopologyModel) -> TopologyDiff` を実装
+  - [ ] ノード: `device-id` で added/removed、共通は属性（device-type/zone/asn/loopback/interface）を比較し `NodeChange`
+  - [ ] エッジ: `connection-id` 優先、無ければ**無向・ポート込みの正規化キー**で added/removed
+  - [ ] ゾーン: device の zone 集合の差分
+  - [ ] サブネット: `subnet-id`/`prefix` の added/removed
+- [ ] rich でのテキスト要約（＋/−/~ 記号・件数サマリ）
+- [ ] 単体テスト（追加/削除/属性変更/エッジ張替え/変更なし）
+
+**完了の定義**: 既知の変更ペアで `TopologyDiff` が過不足なく算出され、テキスト表示できる。
+
+---
+
+### Phase 1: 図の差分ハイライト
+**目標**: 変更前後を重ねた**差分図**を色分け描画する。
+
+- [ ] `diff.build_diff_dot(before, after, topo_diff) -> str`：和集合グラフの DOT を生成
+  - [ ] 追加ノード/エッジ=緑、削除=赤（点線）、変更ノード=橙、無変更=淡色
+  - [ ] 変更ノードは changed 属性を tooltip/ラベル補助で明示
+  - [ ] 既存の zone(cluster)・アイコン・IP ラベル規約を踏襲
+- [ ] `renderer` に差分描画呼び出しを追加（凡例＝add/del/change を図中に描画）
+- [ ] 差分 PNG/SVG を `output/diff/` へ保存（DOT ソースも）
+
+**完了の定義**: 変更前後の YAML から、追加/削除/変更が色分けされた 1 枚の差分図が出力される。
+
+---
+
+### Phase 2: LLM 自然言語サマリ（任意）
+**目標**: 構造 diff を人間向けの要約文にする。
+
+- [ ] `prompts/diagram-diff.md`（`TopologyDiff` → 箇条書き要約・影響の一言コメント）
+- [ ] `diff.summarize(topo_diff, llm) -> str`（`summary` を充填。捏造せず diff 内容のみ言語化）
+- [ ] LLM をモックした経路テスト
+
+**完了の定義**: `--summarize` で「何がどう変わったか」の日本語要約が付く。
+
+---
+
+### Phase 3: 影響分析（blast radius・任意）
+**目標**: 変更・障害の影響範囲をグラフ探索で提示する。
+
+- [ ] `impact(model, removed_devices|removed_edges) -> ImpactReport`：到達不能になるノード集合
+- [ ] 差分図上での影響範囲ハイライト（削除により分断される領域）
+- [ ] `validator` の SPOF 検出ロジック（Tarjan）を共有
+
+**完了の定義**: ある機器/リンクを落としたときの到達不能範囲を提示できる。
+
+---
+
+### Phase 4: CLI・Web・テスト統合
+**目標**: CLI/GUI から差分を実行・閲覧できる。
+
+- [ ] `main.py` に `diff` サブコマンド（`python main.py diff --before a.yaml --after b.yaml [--summarize] [--json] [--format]`）
+- [ ] 終了コード規約（差分ありで 1／`--exit-zero` で常に 0。CI の変更検知に使える）
+- [ ] Web: `POST /api/diff`（before/after を選択・アップロード）→ 差分図＋TopologyDiff＋要約
+- [ ] Web: v2d/d2v 履歴の 2 ジョブ選択で差分表示（GUI 上の変更レビュー）
+- [ ] `tests/test_diff.py` と Web API テストを追加
+
+**完了の定義**: CLI/GUI で差分図・構造 diff・要約を確認でき、`pytest` が緑。
+
+---
+
+## 技術的決定事項（diff）
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| 追加依存 | **なし**（内製の構造比較＋既存 `renderer`） | 軽量・決定論的。graphviz 以外を増やさない |
+| マッチキー | `device-id` / `connection-id` / `subnet-id` を安定キーに | 実体追跡で「変更」を正しく検出（張替えの誤検出を回避） |
+| 差分図方式 | 和集合グラフを 1 枚に色分け | 変更前後の 2 枚並置より変化点を把握しやすい |
+| 出力先 | `output/diff/<name>/` | 既存 `output/` 規約を踏襲（`.gitignore` 済み） |
+
+## リスクと対策（diff）
+
+- **ID 変更（rename）を add+del と誤認** → 属性類似度による rename 推定を将来オプション化（初期は add/del 表示＋注記）
+- **大規模差分図の可読性低下** → 変更に関与するノード近傍のみ描画する `--changed-only` を用意
+- **エッジキーの不安定さ**（ポート未定義） → 無向・ポート込み正規化キーで吸収し、connection-id 優先
+
+## マイルストーン（diff）
+
+### D1: 構造 diff — [ ] `compare()` が `TopologyDiff` を返す（Phase 0）
+### D2: 差分図 — [ ] add/del/change を色分け描画（Phase 1）
+### D3: 要約 — [ ] `--summarize` で自然言語サマリ（Phase 2）
+### D4: 統合 — [ ] CLI/GUI・履歴比較・テスト（Phase 4）
+
+## 直近の次アクション（diff）
+
+- [ ] `TopologyDiff` モデルと `compare()` を実装しテストを通す
+- [ ] エッジの無向・ポート込み正規化キーを確定する
+- [ ] `build_diff_dot()` で和集合グラフの色分け描画を成立させる
+- [ ] `main.py diff` サブコマンドで差分図＋構造 diff を出力

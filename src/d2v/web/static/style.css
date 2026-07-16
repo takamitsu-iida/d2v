@@ -365,3 +365,50 @@ button.secondary {
   border: 1px solid var(--accent);
   margin-top: 10px;
 }
+
+/* ── 検証（design lint）タブ ── */
+.badge.ok { color: #1a7f37; border-color: #1a7f37; }
+.badge.ng { color: #d1242f; border-color: #d1242f; }
+
+.warn-note {
+  background: #4d3800;
+  color: #ffd479;
+  border: 1px solid #7a5c00;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.val-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.val-table th, .val-table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.val-table th { background: var(--panel-2); color: var(--muted); }
+.val-table td.dim { color: var(--muted); text-align: center; }
+
+.val-table tr.sev-error td:first-child { color: #ff6b6b; font-weight: 600; }
+.val-table tr.sev-warning td:first-child { color: #e3b341; font-weight: 600; }
+.val-table tr.sev-info td:first-child { color: #4aa3df; font-weight: 600; }
+
+#val-details h4 { margin: 16px 0 8px; }
+.val-detail {
+  border-left: 3px solid var(--border);
+  padding: 6px 10px;
+  margin: 8px 0;
+  background: var(--panel-2);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+}
+.val-detail.sev-error { border-left-color: #ff6b6b; }
+.val-detail.sev-warning { border-left-color: #e3b341; }
+.val-detail.sev-info { border-left-color: #4aa3df; }
+.val-detail-head { font-weight: 600; margin-bottom: 4px; }

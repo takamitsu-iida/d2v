@@ -1,0 +1,21 @@
+# d2v セマンティック検証（validate）用のサンプルポリシー。
+#
+# 使い方:
+#   python main.py validate -i examples/sample_topology_small.yaml \
+#       --policy examples/sample_policy.yaml
+#
+# セレクタ（from/to/via/zone）は文字列または {zone: .., type: ..} で指定する。
+# 文字列は zone 名または device-type のどちらかに一致すれば対象になる。
+
+# ゾーン間通信ポリシー: src から dst への通信は必ず via を経由すること。
+zone-transit:
+  # DMZ から社内オフィスへ向かう通信は firewall を経由すること。
+  - name: dmz-to-office-via-firewall
+    from: dmz
+    to: office
+    via: firewall
+
+# ゾーン冗長ポリシー: 対象デバイスは単一障害点であってはならない。
+zone-redundancy:
+  # core ゾーンの機器は冗長化されていること。
+  - zone: core

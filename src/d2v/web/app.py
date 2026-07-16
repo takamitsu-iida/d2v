@@ -36,7 +36,16 @@ app = FastAPI(
 @app.get("/api/meta")
 def get_meta() -> dict:
     """UI 初期化に必要なメタ情報（プロバイダ・既定値・サンプル一覧）を返す。"""
-    examples = sorted(p.name for p in _EXAMPLES_DIR.glob("*.yaml")) if _EXAMPLES_DIR.exists() else []
+    # トポロジのサンプルのみを列挙する（ポリシーファイル等は除外）
+    examples = (
+        sorted(
+            p.name
+            for p in _EXAMPLES_DIR.glob("*.yaml")
+            if "policy" not in p.name
+        )
+        if _EXAMPLES_DIR.exists()
+        else []
+    )
     return {
         "llm_provider": settings.llm_provider,
         "examples": examples,
@@ -91,20 +100,27 @@ class D2VJobRequest(BaseModel):
 
 def _resolve_input_text(req: D2VJobRequest) -> str:
     """リクエストから入力 YAML 本文を取り出す（検証つき）。"""
-    if req.source == "example":
-        if not req.example:
+    return _read_yaml_source(req.source, req.example, req.yaml_text)
+
+
+def _read_yaml_source(
+    source: str, example: str | None, yaml_text: str | None
+) -> str:
+    """source（example/text）から YAML 本文を取り出す（パストラバーサル・サイズ検証つき）。"""
+    if source == "example":
+        if not example:
             raise HTTPException(400, "source=example のときは example を指定してください。")
         # パストラバーサル防止: examples ディレクトリ直下の実在ファイルのみ許可
-        target = (_EXAMPLES_DIR / req.example).resolve()
+        target = (_EXAMPLES_DIR / example).resolve()
         if target.parent != _EXAMPLES_DIR.resolve() or not target.is_file():
-            raise HTTPException(400, f"サンプル '{req.example}' が見つかりません。")
+            raise HTTPException(400, f"サンプル '{example}' が見つかりません。")
         return target.read_text(encoding="utf-8")
-    if req.source == "text":
-        if not req.yaml_text or not req.yaml_text.strip():
+    if source == "text":
+        if not yaml_text or not yaml_text.strip():
             raise HTTPException(400, "source=text のときは yaml_text を指定してください。")
-        if len(req.yaml_text.encode("utf-8")) > settings.webui_max_yaml_bytes:
+        if len(yaml_text.encode("utf-8")) > settings.webui_max_yaml_bytes:
             raise HTTPException(413, "YAML が大きすぎます。")
-        return req.yaml_text
+        return yaml_text
     raise HTTPException(400, "source は 'example' または 'text' を指定してください。")
 
 
@@ -135,6 +151,70 @@ def create_d2v_job(req: D2VJobRequest) -> dict:
     except JobBusyError as e:
         raise HTTPException(429, str(e))
     return {"job_id": job.id, "state": job.state.value}
+
+
+# ---------------------------------------------------------------------------
+# セマンティック検証 API（design lint）
+# ---------------------------------------------------------------------------
+
+
+class ValidateRequest(BaseModel):
+    """セマンティック検証リクエスト。"""
+
+    source: str = Field("example", description="'example' | 'text'")
+    example: str | None = None
+    yaml_text: str | None = None
+    explain: bool = False
+    strict: bool = False
+
+
+@app.post("/api/validate")
+def validate_topology(req: ValidateRequest) -> dict:
+    """トポロジ YAML を同期的にセマンティック検証し、結果を返す。
+
+    検証は決定論的で高速なため（LLM 不要）、ジョブ化せず即時に結果を返す。
+    ``explain=True`` のときのみ LLM で理由・修正案を付与する（失敗しても検証結果は返す）。
+    """
+    import tempfile
+
+    from d2v import validator
+    from d2v.errors import D2VError
+    from d2v.parser import load_model
+
+    text = _read_yaml_source(req.source, req.example, req.yaml_text)
+
+    # load_model は Path を要求するため一時ファイルへ書き出してパースする。
+    tmp: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(text)
+            tmp = Path(f.name)
+        try:
+            model = load_model(tmp)
+        except D2VError as e:
+            raise HTTPException(400, str(e))
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+    report = validator.validate(model)
+
+    explain_error: str | None = None
+    if req.explain and report.issues:
+        try:
+            report = validator.explain(report, model)
+        except (SystemExit, Exception) as e:  # noqa: BLE001 - 検証結果は必ず返す
+            explain_error = f"説明の生成に失敗しました: {e}"
+
+    return {
+        "ok": report.ok,
+        "passed": report.passed(strict=req.strict),
+        "counts": report.counts,
+        "issues": [i.model_dump() for i in report.issues],
+        "explain_error": explain_error,
+    }
 
 @app.get("/api/jobs")
 def list_jobs() -> dict:

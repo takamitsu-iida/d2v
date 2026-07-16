@@ -38,6 +38,17 @@ async function loadMeta() {
       opt.textContent = name;
       sel.appendChild(opt);
     }
+    // 検証タブのサンプル一覧も反映
+    const vsel = document.getElementById("val-example-select");
+    if (vsel) {
+      vsel.innerHTML = "";
+      for (const name of META.examples) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        vsel.appendChild(opt);
+      }
+    }
     // 既定値を反映
     const d = META.defaults;
     setVal("p-split-threshold", d.split_threshold);
@@ -745,6 +756,122 @@ function flash2(msg) {
 }
 
 // ── エントリポイント ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// 検証（design lint）
+// ══════════════════════════════════════════════════════════════════
+const VAL_SEV_CLASS = { error: "sev-error", warning: "sev-warning", info: "sev-info" };
+
+function initValidate() {
+  document.querySelectorAll('input[name="val-source"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      const src = document.querySelector('input[name="val-source"]:checked').value;
+      document.querySelectorAll(".val-src-block").forEach((b) => {
+        b.hidden = b.dataset.src !== src;
+      });
+    })
+  );
+  document.getElementById("val-form").addEventListener("submit", submitValidate);
+}
+
+async function submitValidate(e) {
+  e.preventDefault();
+  const btn = document.getElementById("val-run-btn");
+  const source = document.querySelector('input[name="val-source"]:checked').value;
+  const payload = {
+    source,
+    strict: document.getElementById("val-strict").checked,
+    explain: document.getElementById("val-explain").checked,
+  };
+  if (source === "example") {
+    payload.example = document.getElementById("val-example-select").value;
+  } else {
+    payload.yaml_text = document.getElementById("val-yaml-text").value;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "検証中…";
+  try {
+    const res = await fetch("/api/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    renderValidate(data);
+  } catch (err) {
+    renderValidateError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ 検証する";
+  }
+}
+
+function renderValidate(data) {
+  document.getElementById("val-idle").hidden = true;
+  document.getElementById("val-result-wrap").hidden = false;
+
+  const c = data.counts || { error: 0, warning: 0, info: 0 };
+  const badge = document.getElementById("val-summary");
+  const label = data.passed ? "合格" : "不合格";
+  badge.textContent = `${label} (error ${c.error} / warning ${c.warning} / info ${c.info})`;
+  badge.className = "badge " + (data.passed ? "ok" : "ng");
+
+  const errBox = document.getElementById("val-explain-error");
+  if (data.explain_error) {
+    errBox.hidden = false;
+    errBox.textContent = data.explain_error;
+  } else {
+    errBox.hidden = true;
+  }
+
+  const tbody = document.getElementById("val-tbody");
+  const issues = data.issues || [];
+  if (issues.length === 0) {
+    tbody.innerHTML =
+      `<tr><td colspan="4" class="dim">設計上の問題は検出されませんでした。</td></tr>`;
+  } else {
+    tbody.innerHTML = issues.map((i) =>
+      `<tr class="${VAL_SEV_CLASS[i.severity] || ""}">` +
+      `<td>${escapeHtml(i.severity)}</td>` +
+      `<td>${escapeHtml(i.rule)}</td>` +
+      `<td>${escapeHtml(i.message)}</td>` +
+      `<td>${escapeHtml((i.targets || []).join(", "))}</td></tr>`
+    ).join("");
+  }
+
+  const details = document.getElementById("val-details");
+  const explained = issues.filter((i) => i.explanation || i.suggestion);
+  if (explained.length) {
+    details.hidden = false;
+    details.innerHTML =
+      `<h4>詳細（--explain）</h4>` +
+      explained.map((i) =>
+        `<div class="val-detail ${VAL_SEV_CLASS[i.severity] || ""}">` +
+        `<div class="val-detail-head">${escapeHtml(i.rule)} ` +
+        `<span class="dim">[${escapeHtml((i.targets || []).join(", "))}]</span></div>` +
+        (i.explanation ? `<div><strong>理由:</strong> ${escapeHtml(i.explanation)}</div>` : "") +
+        (i.suggestion ? `<div><strong>修正案:</strong> ${escapeHtml(i.suggestion)}</div>` : "") +
+        `</div>`
+      ).join("");
+  } else {
+    details.hidden = true;
+    details.innerHTML = "";
+  }
+}
+
+function renderValidateError(msg) {
+  document.getElementById("val-idle").hidden = true;
+  document.getElementById("val-result-wrap").hidden = false;
+  document.getElementById("val-summary").textContent = "エラー";
+  document.getElementById("val-summary").className = "badge ng";
+  document.getElementById("val-explain-error").hidden = true;
+  document.getElementById("val-details").hidden = true;
+  document.getElementById("val-tbody").innerHTML =
+    `<tr><td colspan="4" class="sev-error">${escapeHtml(msg)}</td></tr>`;
+}
+
+
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initSourceToggle();
@@ -755,6 +882,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initHistory();
   initShare();
   initV2dToD2v();
+  initValidate();
   loadMeta().then(applyQueryParams);
   document.getElementById("d2v-form").addEventListener("submit", submitJob);
   document.getElementById("preview-btn").addEventListener("click", previewInput);

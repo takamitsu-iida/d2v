@@ -4,6 +4,7 @@
 サブコマンド:
   （なし）        d2v: YAML → 構成図（従来どおり `python main.py -i topology.yaml`）
   v2d            vision-to-diagram: 構成図画像 → iida-network-model YAML
+  validate       セマンティック検証（design lint）: 設計上の問題を検出
 """
 
 from __future__ import annotations
@@ -33,6 +34,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         run_serve(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "validate":
+        run_validate(sys.argv[2:])
         return
     run_d2v()
 
@@ -173,6 +177,14 @@ def run_d2v() -> None:
             "（1.0=不透明、例: 0.4でかなり淡く。デフォルト: 0.4）"
         ),
     )
+    ap.add_argument(
+        "--precheck",
+        action="store_true",
+        help=(
+            "作図前にセマンティック検証（design lint）を実行し、error があれば"
+            "作図せず終了する（`validate` サブコマンド相当の事前チェック）"
+        ),
+    )
     # 引数なしで実行された場合はエラーにせずヘルプを表示して終了する
     if len(sys.argv) == 1:
         ap.print_help()
@@ -191,6 +203,27 @@ def run_d2v() -> None:
         title="[bold blue]d2v  ネットワーク構成図ジェネレーター[/bold blue]",
         expand=False,
     ))
+
+    # ── 事前検証（--precheck）: error があれば作図せず終了 ──────────
+    if args.precheck:
+        from d2v import validator
+        from d2v.parser import load_model
+
+        console.print(Rule("[bold]事前検証（design lint）[/bold]"))
+        try:
+            model = load_model(args.input)
+        except D2VError as e:
+            console.print(f"\n[bold red]✗ {e}[/bold red]\n")
+            sys.exit(1)
+        report = validator.validate(model)
+        console.print(validator.render_report(report))
+        if report.counts.get("error", 0) > 0:
+            console.print(
+                "\n[bold red]✗ 設計上の error を検出したため作図を中止しました。"
+                "[/bold red] [dim](--precheck)[/dim]\n"
+            )
+            sys.exit(1)
+        console.print()
 
     # ── 生成ジョブ実行（service 経由。single/split/focus/zone を自動判別）──
     params = D2VParams(
@@ -418,6 +451,79 @@ def run_v2d(argv: list[str]) -> None:
             title="[bold green]✓ 再描画完了[/bold green]",
             expand=False,
         ))
+
+
+# ---------------------------------------------------------------------------
+# validate サブコマンド（セマンティック検証 / design lint）
+# ---------------------------------------------------------------------------
+
+
+def run_validate(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="d2v validate",
+        description="iida-network-model YAML の設計上の問題を検出します（design lint）。",
+    )
+    ap.add_argument(
+        "--input", "-i",
+        required=True,
+        type=Path,
+        metavar="TOPOLOGY_YAML",
+        help="検証対象のトポロジ YAML",
+    )
+    ap.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        metavar="POLICY_YAML",
+        help="ポリシーファイル（zone-transit / zone-redundancy）を追加検証する",
+    )
+    ap.add_argument(
+        "--explain",
+        action="store_true",
+        help="検出した各 issue に LLM で理由・修正案を付与する（LLM を使用）",
+    )
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="結果を JSON で出力する（機械可読・CI 連携用）",
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="warning も不合格（終了コード 1）として扱う",
+    )
+    args = ap.parse_args(argv)
+
+    from d2v import validator
+    from d2v.parser import load_model
+
+    try:
+        model = load_model(args.input)
+        policies = validator.load_policies(args.policy) if args.policy else None
+    except D2VError as e:
+        console.print(f"\n[bold red]✗ {e}[/bold red]\n")
+        sys.exit(1)
+
+    report = validator.validate(model, policies=policies)
+
+    if args.explain and report.issues:
+        try:
+            report = validator.explain(report, model)
+        except D2VError as e:
+            console.print(f"[yellow]説明の生成に失敗しました（検出結果のみ表示）: {e}[/yellow]")
+
+    if args.json:
+        console.print_json(report.model_dump_json())
+    else:
+        console.print(Panel(
+            f"入力ファイル : [bold cyan]{args.input}[/bold cyan]"
+            + (f"\nポリシー     : [bold cyan]{args.policy}[/bold cyan]" if args.policy else ""),
+            title="[bold blue]d2v  セマンティック検証（design lint）[/bold blue]",
+            expand=False,
+        ))
+        console.print(validator.render_report(report))
+
+    sys.exit(0 if report.passed(strict=args.strict) else 1)
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="d2v" role="tab">d2v: YAML → 図</button>
     <button class="tab" data-tab="v2d" role="tab">v2d: 画像 → YAML</button>
+    <button class="tab" data-tab="validate" role="tab">検証: design lint</button>
   </nav>
 
   <main>
@@ -213,6 +214,50 @@
           </div>
 
           <p class="placeholder" id="v2d-idle">画像を選択し、「画像から YAML を抽出」を押してください。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ validate タブ ============ -->
+    <section class="panel" id="panel-validate" role="tabpanel" hidden>
+      <div class="layout">
+        <!-- 左: 入力 -->
+        <div class="col-form">
+          <form id="val-form">
+            <fieldset>
+              <legend>検証対象トポロジ</legend>
+              <div class="radio-row">
+                <label><input type="radio" name="val-source" value="example" checked /> サンプル</label>
+                <label><input type="radio" name="val-source" value="text" /> 貼り付け</label>
+              </div>
+              <div class="val-src-block" data-src="example">
+                <select id="val-example-select"></select>
+              </div>
+              <div class="val-src-block" data-src="text" hidden>
+                <textarea id="val-yaml-text" rows="12" placeholder="iida-network-model YAML を貼り付け"></textarea>
+              </div>
+            </fieldset>
+            <fieldset>
+              <legend>オプション</legend>
+              <label class="checkbox"><input type="checkbox" id="val-strict" /> strict（warning も不合格扱い）</label>
+              <label class="checkbox"><input type="checkbox" id="val-explain" /> 理由・修正案を LLM で付与（--explain）</label>
+            </fieldset>
+            <button type="submit" id="val-run-btn" class="primary">▶ 検証する</button>
+          </form>
+        </div>
+
+        <!-- 右: 結果 -->
+        <div class="col-result">
+          <div id="val-result-wrap" hidden>
+            <h3>検証結果 <span id="val-summary" class="badge"></span></h3>
+            <div id="val-explain-error" class="warn-note" hidden></div>
+            <table class="val-table">
+              <thead><tr><th>重大度</th><th>ルール</th><th>内容</th><th>対象</th></tr></thead>
+              <tbody id="val-tbody"></tbody>
+            </table>
+            <div id="val-details" hidden></div>
+          </div>
+          <p class="placeholder" id="val-idle">対象を選び、「検証する」を押してください。</p>
         </div>
       </div>
     </section>
