@@ -12,6 +12,7 @@ from rich.table import Table
 
 from d2v import evaluator, generator, renderer
 from d2v.evaluator import EvaluationResult
+from d2v.progress import ProgressCallback, ProgressEvent, emit
 
 console = Console()
 
@@ -94,6 +95,7 @@ def run(
     patience: int = 1,
     zone_opacity: float = 0.4,
     system_prompt_file: str = "diagram-system.md",
+    progress_callback: ProgressCallback | None = None,
 ) -> PipelineResult:
     """生成 → 評価 → 改善ループを実行する。
 
@@ -118,6 +120,9 @@ def run(
             背景色を淡く（透過）してレンダリングする。
         system_prompt_file: DOT 生成に使うシステムプロンプトファイル名。俯瞰図など
             用途に応じて切り替える（デフォルトはデバイス詳細図用）。
+        progress_callback: 進捗イベントのコールバック（Web GUI 用）。None なら
+            従来どおり rich のコンソール表示のみ。設定時は各ステップで
+            ``ProgressEvent`` を追加的に emit する（コンソール表示は維持）。
 
     Returns:
         PipelineResult（ベストスコアの DOT・画像・評価結果を含む）
@@ -130,15 +135,27 @@ def run(
     for i in range(max_iterations):
         iter_dir = output_dir / f"iter_{i:02d}"
         console.print(f"\n[bold cyan]── Iteration {i + 1}/{max_iterations} ──[/bold cyan]")
+        emit(progress_callback, ProgressEvent(
+            stage="iteration_start", iteration=i, total=max_iterations,
+            message=f"Iteration {i + 1}/{max_iterations}",
+        ))
 
         # ── 生成 ────────────────────────────────────────────────
         console.print("  [dim][1/3] DOT コード生成中...[/dim]")
+        emit(progress_callback, ProgressEvent(
+            stage="generate", iteration=i, total=max_iterations,
+            message="DOT コード生成中",
+        ))
         dot_code = generator.generate(
             topology_text, improvement_hints, system_prompt_file=system_prompt_file
         )
 
         # ── レンダリング ─────────────────────────────────────────
         console.print("  [dim][2/3] Graphviz レンダリング中...[/dim]")
+        emit(progress_callback, ProgressEvent(
+            stage="render", iteration=i, total=max_iterations,
+            message="Graphviz レンダリング中",
+        ))
         try:
             img_path = renderer.render(
                 dot_code, iter_dir, stem=stem, fmt=fmt, zone_opacity=zone_opacity
@@ -153,6 +170,10 @@ def run(
             console.print(
                 "  [yellow]  → エラーを改善点として次イテレーションで修正を試みます。[/yellow]"
             )
+            emit(progress_callback, ProgressEvent(
+                stage="render_failed", iteration=i, total=max_iterations,
+                message=f"レンダリング失敗: {e}",
+            ))
             improvement_hints = [
                 "生成した DOT コードが Graphviz の構文エラーでレンダリングに失敗しました。"
                 "有効な DOT 構文になるよう修正してください。"
@@ -162,6 +183,10 @@ def run(
 
         # ── 評価 ─────────────────────────────────────────────────
         console.print("  [dim][3/3] LLM 評価中...[/dim]")
+        emit(progress_callback, ProgressEvent(
+            stage="evaluate", iteration=i, total=max_iterations,
+            message="LLM 評価中",
+        ))
         result = evaluator.evaluate(
             dot_code=dot_code,
             topology_text=topology_text,
@@ -199,6 +224,12 @@ def run(
             console.print(f"  [dim]  · {issue}[/dim]")
         if len(result.issues) > 3:
             console.print(f"  [dim]  ... 他 {len(result.issues) - 3} 件[/dim]")
+        emit(progress_callback, ProgressEvent(
+            stage="score", iteration=i, total=max_iterations,
+            score=result.score, passed=result.passed, is_best=is_best,
+            message=f"スコア {result.score}/10",
+            extra={"issues": list(result.issues)},
+        ))
 
         # ── 終了判定 ─────────────────────────────────────────────
         if result.passed:
@@ -206,6 +237,11 @@ def run(
                 f"\n  [bold green]✓ スコア {result.score} が閾値 {threshold} に達しました。"
                 f"ループ終了。[/bold green]"
             )
+            emit(progress_callback, ProgressEvent(
+                stage="passed", iteration=i, total=max_iterations,
+                score=result.score, passed=True,
+                message=f"スコア {result.score} が閾値 {threshold} に到達",
+            ))
             break
 
         # ── 早期終了判定（改善が頭打ちなら打ち切って高速化）───────
@@ -215,6 +251,11 @@ def run(
                 f"\n  [yellow]→ スコアが {no_improve_streak} 回連続で改善しなかったため"
                 f"早期終了します（ベスト: {best_record.result.score}/10）。[/yellow]"
             )
+            emit(progress_callback, ProgressEvent(
+                stage="early_stop", iteration=i, total=max_iterations,
+                score=best_record.result.score,
+                message=f"改善頭打ちで早期終了（ベスト: {best_record.result.score}/10）",
+            ))
             break
 
         # ── 次イテレーション準備（改善点を渡す）─────────────────
@@ -235,6 +276,15 @@ def run(
 
     # ── サマリーテーブル ──────────────────────────────────────────
     _print_summary(records, threshold)
+
+    emit(progress_callback, ProgressEvent(
+        stage="pipeline_done",
+        score=best_record.result.score,
+        passed=best_record.result.passed,
+        total=len(records),
+        message=f"完了（ベスト {best_record.result.score}/10, {len(records)} イテレーション）",
+        extra={"best_image": str(best_final_image)},
+    ))
 
     return PipelineResult(
         best_dot=best_record.dot_code,

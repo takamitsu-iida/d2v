@@ -734,3 +734,288 @@ network-model:
 - [ ] JSON スキーマを確定する
 - [ ] `src/d2v/vision/` 配下の構成を決める
 - [ ] PoC のテスト画像を用意する
+
+
+<br><br><br>
+
+---
+
+<br><br><br>
+
+
+# webui (ブラウザ GUI 化) 実装計画
+
+## 目的
+
+これまで CLI (`python main.py ...`) で提供してきた d2v / v2d を、
+**ブラウザ上でパラメータを指定し、ブラウザ上で結果（画像・YAML・評価）を確認できる
+GUI アプリケーション**として提供する。既存の CLI は後方互換のまま残し、
+GUI はその上に乗せる「もう 1 つのフロントエンド」として追加する。
+
+```
+                ┌───────────────────────────┐
+                │   ブラウザ (SPA フロント)   │
+                │  パラメータ入力 / 結果表示   │
+                └────────────┬──────────────┘
+                             │ REST + SSE(進捗)
+                             ▼
+                ┌───────────────────────────┐
+                │   FastAPI (src/d2v/web)    │
+                │   jobs.py: 非同期ジョブ管理  │
+                └────────────┬──────────────┘
+                             │ 直接呼び出し（共通化）
+                             ▼
+                ┌───────────────────────────┐
+                │  service.py（CLI と共有）    │
+                │  parser / partitioner /     │
+                │  pipeline / v2d.pipeline    │
+                └───────────────────────────┘
+```
+
+---
+
+## 設計方針
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| バックエンド | **FastAPI + Uvicorn** | 既存 Python パイプラインを直接再利用できる。非同期・SSE・ファイルアップロードに強い。Gradio/Streamlit より UI とジョブ制御の自由度が高い（focus/zone/split の分岐や複数枚出力、進捗ログを表現しやすい） |
+| フロントエンド | **静的 SPA（HTML + Vanilla JS + CSS）** | 追加ビルド基盤（npm/バンドラ）を持ち込まず、FastAPI から静的配信するだけで完結。将来 React 等へ差し替え可能な薄い構成 |
+| 進捗表示 | **SSE (Server-Sent Events)** | LLM ループは長時間。サーバ→クライアントの一方向ストリームで十分。WebSocket より実装が単純 |
+| ジョブ実行 | **バックグラウンドスレッド + インメモリ ジョブレジストリ** | LLM 呼び出しは同期ブロッキング。イベントループを塞がないようスレッドプールで実行し、進捗をキュー経由で SSE に流す |
+| CLI との共通化 | **`src/d2v/web/service.py` に分岐ロジックを集約** | `main.py` の `_run_single/_run_split/_run_focus/_run_zone` 相当を再利用可能な純関数として切り出し、CLI・Web の両方から呼ぶ（ロジック二重化を防ぐ） |
+| 進捗フック | **`pipeline.run(..., progress_callback=None)` を追加** | 既定 `None` で従来どおり rich 表示。GUI 実行時のみコールバックでイベントを受け取り SSE へ転送（既存挙動を壊さない） |
+| 既存 CLI | **完全維持** | `python main.py -i ...` / `python main.py v2d -i ...` は不変。GUI は `python main.py serve` など別サブコマンドで起動 |
+
+---
+
+## ディレクトリ構成（目標）
+
+```
+src/d2v/web/
+├── __init__.py
+├── app.py            # FastAPI アプリ定義・ルーティング・静的配信
+├── service.py        # d2v/v2d オーケストレーション（CLI と共通のジョブ本体）
+├── jobs.py           # ジョブレジストリ（生成/実行/進捗キュー/結果保持）
+├── events.py         # 進捗イベント・ジョブ状態の Pydantic モデル
+└── static/
+    ├── index.html    # SPA 本体（d2v / v2d タブ）
+    ├── app.js        # フォーム制御・API 呼び出し・SSE 購読・結果描画
+    └── style.css
+```
+
+---
+
+## API 設計（案）
+
+| メソッド | パス | 用途 |
+|---------|------|------|
+| GET | `/` | SPA（index.html）を返す |
+| GET | `/api/meta` | 利用可能な LLM プロバイダ・既定パラメータ・`examples/` 一覧・既定閾値等 |
+| GET | `/api/examples/{name}` | サンプル YAML の内容を返す（プレビュー用） |
+| POST | `/api/d2v/jobs` | d2v ジョブ作成（パラメータ JSON or YAML 本文）→ `job_id` を返す |
+| POST | `/api/v2d/jobs` | v2d ジョブ作成（画像アップロード, multipart）→ `job_id` |
+| GET | `/api/jobs/{id}` | ジョブ状態・結果メタ（スコア・出力ファイル一覧・複数枚情報） |
+| GET | `/api/jobs/{id}/events` | **SSE**: 進捗イベントストリーム（開始/生成/評価/スコア/完了/エラー） |
+| GET | `/api/jobs/{id}/image?name=...` | 生成画像（PNG/SVG）を返す |
+| GET | `/api/jobs/{id}/artifact?name=...` | DOT ソース・評価 JSON・v2d YAML/サイドカー等 |
+| DELETE | `/api/jobs/{id}` | ジョブと成果物の破棄（任意） |
+
+**パラメータ（d2v ジョブ）**: 既存 CLI と 1:1 対応させる。
+`input`（examples 選択 / アップロード / 貼り付け YAML のいずれか）,
+`format`, `max_iter`, `threshold`, `patience`, `mode`（`auto|single|split|focus|zone`）,
+`split_threshold`, `no_split`, `focus[]`, `hops`, `zone[]`, `zone_opacity`。
+
+**パラメータ（v2d ジョブ）**: `image`(必須アップロード), `truth`(任意), `rerender`(bool), `format`。
+
+---
+
+## 実装フェーズ
+
+### Phase 0: 技術選定と基盤
+**目標**: FastAPI アプリが起動し、静的 SPA の雛形を配信できる。
+
+- [x] `pyproject.toml` に `[project.optional-dependencies].web`（`fastapi`, `uvicorn[standard]`, `python-multipart`）を追加
+- [x] `src/d2v/web/app.py` に最小 FastAPI アプリ + `/api/meta` + 静的配信を実装
+- [x] `main.py` に `serve` サブコマンド（`python main.py serve --host 127.0.0.1 --port 8000`）を追加。既定は localhost バインド
+- [x] `static/index.html` に空の 2 タブ（d2v / v2d）雛形
+
+**完了の定義**: `python main.py serve` でブラウザから空 UI と `/api/meta` を確認できる。
+
+**実装（2026-07-16）**
+- `pyproject.toml` に optional extra `web`（fastapi / uvicorn[standard] / python-multipart）を追加。GUI 未使用者へ依存を強制しない。
+- `src/d2v/web/`（新パッケージ）: `app.py`（FastAPI アプリ・`GET /`・`GET /api/meta`・`/static` マウント）、`static/index.html`・`app.js`・`style.css`（2 タブ SPA 雛形＋メタ情報読み込み＋タブ切替）。
+- `main.py` に `serve` サブコマンド分岐を追加（`python main.py serve --host/--port/--reload`）。既定 `127.0.0.1`。uvicorn 未インストール時は `pip install -e '.[web]'` を促して終了。既存 d2v/v2d CLI は不変。
+- 動作確認: `python main.py serve` 起動 →`/api/meta`（provider=azure・examples 3 件・既定値）を JSON 応答、`/` が SPA を返し、`/static/app.js`・`style.css` が 200。
+- 注意: `./main.py` の shebang は system python のため、GUI 起動は venv の python（`.venv/bin/python main.py serve` または venv 有効化後の `python main.py serve`）を使う。
+
+---
+
+### Phase 1: CLI ロジックの共通化（リファクタ）
+**目標**: `main.py` の生成分岐を Web からも呼べる純関数に切り出す。
+
+- [x] `src/d2v/web/service.py` に `run_d2v_job(params, output_dir, progress)` を実装
+      （`auto/single/split/focus/zone` の分岐を集約し、`parser` → `partitioner` → `pipeline.run` を駆動）
+- [x] `src/d2v/pipeline.py` の `run()` に `progress_callback: Callable | None = None` を追加し、
+      各ステップ（生成開始/レンダリング/評価スコア/ベスト更新/イテレーション完了）でイベントを emit（既定 None で従来挙動）
+- [x] `main.py` を `service.py` 経由に置き換え（CLI 出力は progress_callback を rich 表示に橋渡し）
+- [x] 既存 CLI の回帰確認（`--focus` / `--zone` / `--no-split` / v2d が不変で動作）
+
+**完了の定義**: CLI の全モードが `service.py` 経由で従来どおり動作し、進捗イベントを購読できる。
+
+**実装（2026-07-16）**
+- `src/d2v/progress.py`（新規）: UI 非依存の `ProgressEvent` / `ProgressCallback` / `emit()` を定義。CLI(rich) と Web(SSE) で同一イベント源を共有する。
+- `src/d2v/pipeline.py`: `run()` に `progress_callback` を追加。iteration_start / generate / render / render_failed / evaluate / score / passed / early_stop / pipeline_done を**追加的に** emit（既存の rich コンソール表示は維持し、既定 None で従来挙動を完全保持）。
+- `src/d2v/web/service.py`（新規）: `D2VParams` / `DiagramOutput` / `D2VJobResult` / `D2VJobError` と `run_d2v_job()` を実装。`main.py` の single/split/focus/zone 分岐・検証・境界図構築・ベスト画像集約をここへ集約。検証エラーは `sys.exit` ではなく `D2VJobError` を送出（Web で捕捉可能）。job レベルの topology / plan / diagram_start / diagram_done / job_done を emit。
+- `main.py`: run_d2v を service 経由へ置換。`_run_single/_run_split/_run_focus/_run_zone` を削除し、`_cli_progress`（job レベルイベントを rich 表示。イテレーション詳細は pipeline が自前表示）＋ `_print_job_summary/_print_single_summary/_print_split_summary` に再編。未使用となった `parser/pipeline/shutil` の import を除去。
+- 回帰確認: `python -m pytest tests/ -q` → **25 passed**。`python main.py -i examples/sample_topology_large.yaml --zone dc-core` を実行し、Step ヘッダ・イテレーション詳細・サマリーパネル・出力パスが従来どおり（9/10、passed）であることを確認。v2d CLI は不変。
+
+---
+
+### Phase 2: ジョブ管理と進捗ストリーミング
+**目標**: 非同期ジョブの作成・実行・進捗配信を成立させる。
+
+- [x] `src/d2v/web/events.py`: `JobStatus`(queued/running/succeeded/failed) と `ProgressEvent`(type/iteration/score/message/timestamp) を Pydantic 定義
+- [x] `src/d2v/web/jobs.py`: インメモリ `JobRegistry`。ジョブ生成 → `ThreadPoolExecutor` で `service.run_*_job` 実行 → 進捗を `queue.Queue` に蓄積 → 結果・成果物パスを保持
+- [x] `/api/d2v/jobs`（作成）・`/api/jobs/{id}`（状態）・`/api/jobs/{id}/events`（SSE）を実装
+- [x] 各ジョブは一意な作業ディレクトリ（`output/webui/<job_id>/`）へ出力
+- [x] LLM 認証エラー・レート制限・生成失敗を `failed` として構造化返却（CLI の sys.exit を Web で捕捉できるよう例外化）
+
+**完了の定義**: API から d2v ジョブを投げ、SSE で iteration ごとのスコア進捗を受信し、完了時に結果メタを取得できる。
+
+**実装（2026-07-16）**
+- `src/d2v/web/events.py`（新規）: `JobState`(queued/running/succeeded/failed) と `event_to_dict()`（`ProgressEvent` → SSE 用 JSON。Path 等を再帰的に str 化する `_sanitize`）。
+- `src/d2v/web/jobs.py`（新規）: `Job`（状態・結果・進捗蓄積）と `JobRegistry`。進捗配信は `queue.Queue` ではなく `threading.Condition` + イベントリスト方式に変更（遅延接続でも全イベントをリプレイでき、複数 SSE 接続が独立インデックスで並行購読できるため堅牢）。`ThreadPoolExecutor(max_workers=2)` で `service.run_d2v_job` を実行し、`job.add_event` を progress_callback として渡す。`D2VJobError`→検証エラー、`SystemExit`→認証/レンダリング失敗、その他例外を全て `failed` として構造化。`output/webui/<job_id>/` に隔離出力。
+- `src/d2v/web/app.py`: `D2VJobRequest`(Pydantic, CLI 引数と 1:1・範囲バリデーション付き)、`POST /api/d2v/jobs`（example 名のパストラバーサル防止・YAML サイズ上限 1MB）、`GET /api/jobs/{id}`（状態＋結果メタ）、`GET /api/jobs/{id}/events`（`StreamingResponse` による SSE）を追加。
+- 動作確認: small サンプルで job 作成 → SSE で topology/plan/iteration_start/generate/render/evaluate/score/passed/pipeline_done/job_done/end の全イベントを受信 → 状態 `succeeded`（score 10, image=input_best.png）。異常系も確認: パストラバーサル example → **400**、不正 YAML → job `failed`（サーバ継続・クラッシュせず）。429 レート制限は既存リトライで自動処理。
+
+---
+
+### Phase 3: d2v フロントエンド（入力と結果表示）
+**目標**: ブラウザだけで d2v を実行し画像を確認できる。
+
+- [x] 入力パネル: サンプル選択 / ファイルアップロード / YAML 直接貼り付けの切替
+- [x] パラメータフォーム: format, max-iter, threshold, patience, mode, split-threshold, no-split, focus+hops, zone(複数選択), zone-opacity（CLI と 1:1）
+- [x] 実行 → SSE 進捗ログ（イテレーション・スコアの逐次表示）＋スコア推移スパークライン
+- [x] 結果ビュー: 生成画像プレビュー（ズーム/パン）、分割時は複数枚をタブ/ギャラリー表示、俯瞰図＋ゾーン詳細の区別
+- [x] 詳細タブ: DOT ソース表示（シンタックス強調）、評価 JSON（スコア・指摘事項）、各成果物のダウンロードリンク
+- [x] YAML 妥当性の事前チェック（`parser.load_model` 相当をサーバ側 dry-run するエンドポイント、任意）
+
+**完了の定義**: サンプル選択 → 実行 → 画像・スコア・DOT・評価をブラウザで確認しダウンロードできる。
+
+**実装（2026-07-16）**
+- `app.py`: 成果物配信エンドポイントを追加。`GET /api/examples/{name}`（プレビュー）、`GET /api/jobs/{id}/image|dot|eval`（key で図を選択、パストラバーサル不要な key 方式）。
+- `static/index.html`: d2v パネルを実装。左カラム＝入力（サンプル/ファイル/貼り付けの切替・プレビュー）＋パラメータフォーム（format/max-iter/threshold/patience/mode/split-threshold/no-split/focus+hops/zone/zone-opacity を CLI と 1:1）、右カラム＝進捗＋結果。
+- `static/app.js`: メタ読込→フォーム初期化、モード別オプション表示、ジョブ投入、`EventSource` による SSE 購読で進捗ログを逐次表示、スコア推移を SVG スパークライン描画。完了後に結果（画像/DOT/評価タブ・複数枚の図切替タブ・ダウンロードリンク）を描画。`escapeHtml` で XSS 対策。
+- `static/style.css`: 2 カラムレイアウト・フォーム・進捗ログ・結果ビューのスタイル。
+- ブラウザ実機確認（統合ブラウザ）: small サンプル×single で実行 → SSE 進捗が逐次表示、スパークライン「スコア推移: 10」、結果画像（WAN/Core/DMZ/Office の cluster・IP ラベル付き）を表示、DOT タブ（DOT ソース）・評価タブ（10/10・全ルールチェック✓・指摘なし）・画像/DOT ダウンロードリンクまで全て動作。dry-run は「プレビュー」ボタン＋ `parser` によるジョブ実行時検証で担保（不正 YAML は job failed）。
+
+---
+
+### Phase 4: v2d フロントエンド（画像 → YAML）
+**目標**: 画像アップロードから YAML・精度・再描画をブラウザで確認できる。
+
+- [x] v2d タブ: 画像ドラッグ&ドロップ、プレビュー、`truth` YAML 任意指定、`rerender` トグル
+- [x] `/api/v2d/jobs`（multipart アップロード）→ SSE 進捗 → 抽出サマリ（node/edge/cluster/confidence）表示
+- [x] 出力: 生成 YAML の表示・コピー・ダウンロード、サイドカー JSON、notes/low-confidence の表示
+- [x] `truth` 指定時は精度（ノード/エッジ F1・種別/ゾーン/loopback 一致率）を表形式で表示
+- [x] `rerender` 時は再描画画像を並べて元画像と視覚比較
+- [x] アップロード検証: 拡張子（png/jpg/jpeg）・サイズ上限・MIME 検査（OWASP: 不正ファイル/パストラバーサル対策）
+
+**完了の定義**: 画像を上げると YAML・確信度・（指定時）精度と再描画をブラウザで確認できる。
+
+**実装（2026-07-16）**
+- `service.py`: `V2DJobResult` と `run_v2d_job()` を追加。`v2d.pipeline.run`（抽出→補正→YAML）→ 任意で `v2d.evaluate.evaluate_files`（精度）→ `rerender_with_d2v`（往復再描画）を束ね、`v2d_extract/v2d_extracted/v2d_metrics/v2d_rerender/job_done` を emit。metrics は PRF を構造化 dict 化。
+- `jobs.py`: `create_v2d_job`（画像バイトをジョブ dir に保存・truth 保存）・`_run_v2d` を追加。`Job.result` を `D2VJobResult | V2DJobResult` に拡張し、`to_dict` を kind で分岐（v2d は counts/confidence/notes/low_confidence/metrics/rerender を返す）。
+- `app.py`: `POST /api/v2d/jobs`（multipart, `UploadFile`。拡張子/MIME/サイズ(12MB) 検査）、`GET /api/jobs/{id}/v2d/yaml|sidecar|original|rerender` を追加。
+- `index.html` / `app.js` / `style.css`: v2d パネル（ドラッグ&ドロップ＋プレビュー、rerender/format/truth、SSE 進捗、抽出サマリ、YAML/所見/精度/元画像・再描画の詳細タブ、YAML・サイドカーのダウンロード、精度テーブル）。`FormData` でアップロード。
+- 動作確認: `sample_topology_small_best.png` ＋ 正解 YAML で API 実行 → SSE 全イベント受信、`succeeded`（nodes=7/edges=6/clusters=4・confidence 0.98、**ノード F1=1.00・エッジ F1=0.83**、種別 1.00/ゾーン 0.57/loopback 0.00）。統合ブラウザで v2d タブ→結果描画（サマリ・YAML・精度テーブル・所見・元画像表示・ダウンロード）を確認。異常系（拡張子/MIME/サイズ）は 400/413 で拒否。
+
+---
+
+### Phase 5: 履歴・ギャラリー・利便性（任意）
+**目標**: 実行履歴と成果物を扱いやすくする。
+
+- [x] ジョブ履歴一覧（当該セッションのジョブとスコア・サムネイル）
+- [x] `output/webui/` の既存成果物ブラウズ（overview/zone/focus の階層表示）
+- [x] v2d → d2v ワンクリック連携（抽出 YAML をそのまま d2v タブへ流し込み再描画）
+- [x] パラメータのプリセット保存 / 共有用リンク（クエリ埋め込み）
+
+**完了の定義**: 過去ジョブを一覧・再表示でき、v2d→d2v の往復を GUI で完結できる。
+
+**実装（2026-07-16）**
+- `jobs.py`: `Job.summary()`（履歴用コンパクト要約）と `JobRegistry.list_jobs()`（新しい順）を追加。
+- `app.py`: `GET /api/jobs`（全ジョブ要約一覧）を追加。
+- フロント（`index.html` / `app.js` / `style.css`）:
+  - **履歴ドロワー**: ヘッダの「履歴」ボタンで開閉。d2v/v2d 種別バッジ・ラベル・状態・スコア/確信度・**サムネイル**（d2v はベスト画像、v2d は元画像）を表示。成功ジョブはクリックで該当タブへ切替え結果を再表示（`output/webui/<job_id>/` の成果物を配信経由で参照するため、overview/zone/focus を含む分割ジョブも複数図タブで閲覧可能）。
+  - **v2d → d2v 連携**: v2d 結果の「この YAML で d2v 図を生成 →」ボタンで、抽出 YAML を d2v タブの貼り付け欄へ流し込み（ワンクリックで往復）。
+  - **共有リンク**: 「現在の設定を URL にコピー」で d2v パラメータ（＋サンプル選択）をクエリ化しクリップボードへ。ページ読込時に `applyQueryParams` でフォームへ復元（プリセット/共有）。
+- 動作確認（統合ブラウザ）: 履歴ドロワーに 2 ジョブ（d2v 9/10・v2d node7/edge6/0.99）＋サムネイル表示、クリックで結果再表示、共有 URL（`?mode=zone&threshold=6&zone_opacity=0.6&no_split=1...`）のラウンドトリップ復元、v2d→d2v で抽出 YAML の流し込みを確認。テスト **25 passed**。
+
+---
+
+### Phase 6: セキュリティ・運用・テスト
+**目標**: ローカルツールとして安全・安定に運用できる。
+
+- [x] 既定 `127.0.0.1` バインド。外部公開時の注意を README に明記（認証は範囲外/リバースプロキシ前提）
+- [x] 入力サイズ上限・同時実行ジョブ数の上限・タイムアウト
+- [x] 静的/成果物配信のパス正規化（`output/webui/<job_id>` 配下限定、パストラバーサル防止）
+- [x] 画像/YAML の検証を共通化しエラーを構造化（4xx）
+- [x] `tests/` に API テスト（FastAPI `TestClient`）: ジョブ作成・状態遷移・成果物取得・不正入力拒否（LLM はモック）
+- [x] README に「GUI の使い方」節を追加（起動・パラメータ・スクリーンショット）
+
+**完了の定義**: `pytest` が緑。ローカルで安全に起動でき、README だけで GUI を使い始められる。
+
+**実装（2026-07-16）**
+- `jobs.py`: 同時実行ジョブ数の上限（`MAX_ACTIVE_JOBS=4`）を追加。`_ensure_capacity()` で queued/running を数え、超過時は `JobBusyError`。`app.py` は d2v/v2d の作成で捕捉し **429** を返す。実行は `ThreadPoolExecutor(max_workers=2)` で多重度を制限。
+- パス安全性: 成果物配信は client からパスを受け取らない **key 方式**（d2v）／サーバ保持パス（v2d の original/sidecar/rerender）で、パストラバーサルの余地がない。examples は親ディレクトリ一致を検証。静的配信は `StaticFiles`。
+- 入力検証（構造化 4xx）: YAML 1MB / 画像 12MB 上限、画像の拡張子・MIME 検査、source/format の妥当性 → 400/413。未完了/不明ジョブは 409/404。
+- `tests/test_web_api.py`（新規, 13 件）: `TestClient` で meta・examples（正常＋トラバーサル 404）・d2v 検証（bad source/missing example/traversal/oversize）・**d2v ライフサイクル**（service をフェイク差し替え → 状態遷移 → image/dot/eval 取得 → 履歴掲載）・v2d 検証（拡張子/MIME/空）・**v2d ライフサイクル**（yaml/sidecar/original 取得・未実施 rerender は 404）。LLM 不要で高速。
+- README: 「ブラウザ GUI（Web UI）」節を追加（`pip install -e '.[web]'` / `python main.py serve` / できること / セキュリティ・運用注意）。プロジェクト構成に `web/`・`progress.py` を反映。
+- 検証: `python -m pytest tests/ -q` → **38 passed**（既存 25 + API 13）。
+
+**完了サマリ**: Phase 0〜6 まで全て完了。CLI を後方互換のまま維持しつつ、d2v/v2d をブラウザで実行・確認できる GUI を追加した。
+
+---
+
+## 技術的決定事項（webui）
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| 追加依存 | `fastapi` / `uvicorn[standard]` / `python-multipart` を **optional extra `web`** に | GUI を使わない利用者に追加依存を強制しない |
+| 起動方法 | `python main.py serve`（内部で uvicorn 起動） | 既存エントリポイントに統一。CLI 体験を崩さない |
+| 状態管理 | インメモリ（プロセス内） | 単一ユーザーのローカルツール想定。永続化は将来課題 |
+| 出力先 | `output/webui/<job_id>/` | 既存 `output/` 規約を踏襲。`.gitignore` 済み |
+| 進捗契約 | `pipeline.run` の `progress_callback`（純データイベント） | CLI(rich) と Web(SSE) で同一イベント源を共有 |
+
+## リスクと対策（webui）
+
+- **長時間 LLM ジョブでの UX 低下** → SSE で逐次進捗＋キャンセル（ジョブ破棄）を用意
+- **同時実行によるレート制限（TPM）超過** → 同時ジョブ数を制限し、429 は既存リトライに委譲
+- **CLI ロジック二重化** → Phase 1 の `service.py` 共通化を先に完了させる
+- **セキュリティ（ローカルツールの油断）** → 既定 localhost・入力検証・パス限定を Phase 6 で担保
+
+## マイルストーン（webui）
+
+### W1: 起動
+- [x] `python main.py serve` で空 UI が出る（Phase 0）
+
+### W2: 共通化
+- [x] CLI が service.py 経由で不変動作＋進捗イベント購読（Phase 1-2）
+
+### W3: d2v GUI
+- [x] ブラウザで生成→画像/スコア確認（Phase 3）
+
+### W4: v2d GUI
+- [x] ブラウザで画像→YAML/精度確認（Phase 4）
+
+### W5: 仕上げ
+- [x] 履歴・セキュリティ・テスト・README（Phase 5-6）
+
+---
+
+## 直近の次アクション（webui）
+
+- [x] `web` extra を pyproject に追加し `python main.py serve` の雛形を通す
+- [x] `pipeline.run` に `progress_callback` を追加し CLI を `service.py` 経由へ寄せる
+- [x] SSE で 1 ジョブぶんの進捗が流れる最小経路を通す
+- [x] d2v フォーム（サンプル選択→実行→画像表示）を最小構成で成立させる

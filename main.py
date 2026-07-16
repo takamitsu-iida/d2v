@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -18,7 +17,10 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from d2v import parser, partitioner, pipeline, visualizer
+from d2v import partitioner, visualizer
+from d2v.progress import ProgressEvent
+from d2v.web import service
+from d2v.web.service import D2VJobError, D2VParams
 
 console = Console()
 
@@ -27,6 +29,9 @@ def main() -> None:
     # v2d サブコマンドは専用ハンドラへ振り分ける（従来の d2v CLI は後方互換のまま維持）
     if len(sys.argv) > 1 and sys.argv[1] == "v2d":
         run_v2d(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        run_serve(sys.argv[2:])
         return
     run_d2v()
 
@@ -186,246 +191,120 @@ def run_d2v() -> None:
         expand=False,
     ))
 
-    # ── Step 1: トポロジ解析 ──────────────────────────────────────
-    console.print(Rule("[bold]Step 1  トポロジ解析[/bold]"))
-    model = parser.load_model(args.input)
-    topology_text = parser.build_text(
-        model.devices, model.connections, model.subnets, model.device_map
-    )
-    console.print(topology_text)
-
-    # ── 注目ノード集中図モード / ゾーン限定モード ─────────────────
-    if args.focus is not None and args.zone is not None:
-        console.print(
-            "\n[bold red]✗ --focus と --zone は同時に指定できません。"
-            "どちらか一方を指定してください。[/bold red]\n"
-        )
-        sys.exit(1)
-    if args.focus is not None:
-        _run_focus(args, model)
-        return
-    if args.zone is not None:
-        _run_zone(args, model)
-        return
-
-    # ── 分割計画の判定 ────────────────────────────────────────────
-    diagrams = None if args.no_split else partitioner.plan(model, args.split_threshold)
-
-    if diagrams is None:
-        _run_single(args, topology_text)
-    else:
-        _run_split(args, diagrams)
-
-
-def _run_zone(args: argparse.Namespace, model: "parser.TopologyModel") -> None:
-    """指定したゾーンだけを描画対象にした図を 1 枚生成する。"""
-    # 存在しないゾーンを検出して分かりやすくエラー表示する
-    known = partitioner.available_zones(model)
-    missing = [z for z in args.zone if z not in known]
-    if missing:
-        available = ", ".join(known) or "(なし)"
-        console.print(
-            f"\n[bold red]✗ ゾーン {', '.join(missing)} "
-            "がトポロジに存在しません。[/bold red]\n"
-            f"[dim]利用可能なゾーン: {available}[/dim]\n"
-        )
-        sys.exit(1)
-
-    diagram = partitioner.zone_plan(model, args.zone)
-    if diagram is None:
-        console.print("\n[bold red]✗ ゾーン限定図を生成できませんでした。[/bold red]\n")
-        sys.exit(1)
-
-    console.print(Rule(f"[bold]Step 2  {diagram.title}[/bold]"))
-    console.print(diagram.text)
-
-    sub_stem = f"{args.input.stem}_{diagram.key}"
-    result = pipeline.run(
-        topology_text=diagram.text,
-        output_dir=args.output_dir / diagram.key,
-        stem=sub_stem,
-        fmt=args.format,
-        max_iterations=args.max_iter,
-        threshold=args.threshold,
-        patience=args.patience,
-        zone_opacity=args.zone_opacity,
-    )
-
-    # ベスト画像を出力ルートへ集約
-    final_path = args.output_dir / f"{sub_stem}.{args.format}"
-    shutil.copy2(result.best_image, final_path)
-
-    best = result.best_result
-    score_color = (
-        "green" if best.score >= args.threshold
-        else "yellow" if best.score >= 6
-        else "red"
-    )
-    console.print(Panel(
-        f"最終スコア       : [{score_color}]{best.score}/10[/{score_color}]\n"
-        f"イテレーション数 : {result.total_iterations}/{args.max_iter}\n"
-        f"出力ファイル     : [bold]{final_path}[/bold]",
-        title="[bold green]✓ 完了[/bold green]",
-        expand=False,
-    ))
-
-
-def _run_focus(args: argparse.Namespace, model: "parser.TopologyModel") -> None:
-    """注目ノード（1 台以上）から --hops ホップ以内の集中図を 1 枚生成する。"""
-    if args.hops < 1:
-        console.print("\n[bold red]✗ --hops は 1 以上を指定してください。[/bold red]\n")
-        sys.exit(1)
-
-    # 存在しない注目ノードを検出して分かりやすくエラー表示する
-    missing = [fid for fid in args.focus if fid not in model.device_map]
-    if missing:
-        available = ", ".join(sorted(model.device_map)) or "(なし)"
-        console.print(
-            f"\n[bold red]✗ 注目ノード {', '.join(missing)} "
-            "がトポロジに存在しません。[/bold red]\n"
-            f"[dim]利用可能な device-id: {available}[/dim]\n"
-        )
-        sys.exit(1)
-
-    diagram = partitioner.focus_plan(model, args.focus, args.hops)
-    if diagram is None:
-        console.print("\n[bold red]✗ 集中図を生成できませんでした。[/bold red]\n")
-        sys.exit(1)
-
-    console.print(Rule(f"[bold]Step 2  {diagram.title}[/bold]"))
-    console.print(diagram.text)
-
-    sub_stem = f"{args.input.stem}_{diagram.key}"
-    result = pipeline.run(
-        topology_text=diagram.text,
-        output_dir=args.output_dir / diagram.key,
-        stem=sub_stem,
-        fmt=args.format,
-        max_iterations=args.max_iter,
-        threshold=args.threshold,
-        patience=args.patience,
-        zone_opacity=args.zone_opacity,
-    )
-
-    # ベスト画像を出力ルートへ集約
-    final_path = args.output_dir / f"{sub_stem}.{args.format}"
-    shutil.copy2(result.best_image, final_path)
-
-    best = result.best_result
-    score_color = (
-        "green" if best.score >= args.threshold
-        else "yellow" if best.score >= 6
-        else "red"
-    )
-    console.print(Panel(
-        f"最終スコア       : [{score_color}]{best.score}/10[/{score_color}]\n"
-        f"イテレーション数 : {result.total_iterations}/{args.max_iter}\n"
-        f"出力ファイル     : [bold]{final_path}[/bold]",
-        title="[bold green]✓ 完了[/bold green]",
-        expand=False,
-    ))
-
-
-def _run_single(args: argparse.Namespace, topology_text: str) -> None:
-    """従来どおり 1 枚の図を生成する。"""
-    # ── Step 2: 生成 → 評価 → 改善ループ ─────────────────────────
-    console.print(Rule("[bold]Step 2  生成 → 評価 → 改善ループ[/bold]"))
-    result = pipeline.run(
-        topology_text=topology_text,
+    # ── 生成ジョブ実行（service 経由。single/split/focus/zone を自動判別）──
+    params = D2VParams(
+        input_path=args.input,
         output_dir=args.output_dir,
-        stem=args.input.stem,
         fmt=args.format,
-        max_iterations=args.max_iter,
+        max_iter=args.max_iter,
         threshold=args.threshold,
         patience=args.patience,
+        no_split=args.no_split,
+        split_threshold=args.split_threshold,
+        focus=args.focus,
+        hops=args.hops,
+        zone=args.zone,
         zone_opacity=args.zone_opacity,
     )
+    try:
+        result = service.run_d2v_job(params, progress=_cli_progress)
+    except D2VJobError as e:
+        console.print(f"\n[bold red]✗ {e}[/bold red]\n")
+        sys.exit(1)
 
-    # ── 最終サマリー ──────────────────────────────────────────────
-    best = result.best_result
+    _print_job_summary(args, result)
+
+
+def _cli_progress(event: ProgressEvent) -> None:
+    """service が emit するジョブレベルの進捗を rich で表示する。
+
+    パイプライン内の詳細（イテレーション・スコア等）は pipeline.run が自身の
+    コンソールに出力するため、ここではジョブレベルのイベントのみを扱う。
+    """
+    if event.stage == "topology":
+        console.print(Rule("[bold]Step 1  トポロジ解析[/bold]"))
+        console.print(event.extra.get("text", ""))
+    elif event.stage == "plan":
+        mode = event.extra.get("mode")
+        if mode == "single":
+            console.print(Rule("[bold]Step 2  生成 → 評価 → 改善ループ[/bold]"))
+        elif mode == "split":
+            total = event.total or 0
+            console.print(Rule(
+                f"[bold]Step 2  分割生成（{total} 枚: 俯瞰図 + ゾーン詳細）[/bold]"
+            ))
+            console.print(
+                f"  [yellow]ノード数がしきい値 {event.extra.get('split_threshold')} を超えたため、"
+                f"zone 単位で {total} 枚に分割します。[/yellow]"
+            )
+    elif event.stage == "diagram_start":
+        idx = (event.iteration or 0) + 1
+        total = event.total or 0
+        title = event.extra.get("title", "")
+        if event.extra.get("mode") == "split":
+            console.print(Rule(f"[bold cyan]図 {idx}/{total}  {title}[/bold cyan]"))
+        else:
+            console.print(Rule(f"[bold]Step 2  {title}[/bold]"))
+        console.print(event.extra.get("text", ""))
+
+
+def _print_job_summary(args: argparse.Namespace, result: "service.D2VJobResult") -> None:
+    """ジョブ完了後の最終サマリーをモード別に表示する。"""
+    if result.mode == "split":
+        _print_split_summary(args, result)
+    else:
+        _print_single_summary(args, result)
+
+
+def _print_single_summary(args: argparse.Namespace, result: "service.D2VJobResult") -> None:
+    """single / focus / zone（1 枚）の最終サマリー。"""
+    output = result.outputs[0]
+    best = output.result.best_result
     score_color = (
         "green" if best.score >= args.threshold
         else "yellow" if best.score >= 6
         else "red"
     )
-    # スコア推移グラフの生成
+    # スコア推移グラフの生成（複数イテレーションがあった場合のみ）
     plot_path: Path | None = None
-    if len(result.records) > 1:
+    if len(output.result.records) > 1:
         plot_path = visualizer.plot_score_history(
-            result.records,
+            output.result.records,
             args.output_dir / "score_history.png",
             args.threshold,
         )
 
     console.print(Panel(
         f"最終スコア       : [{score_color}]{best.score}/10[/{score_color}]\n"
-        f"イテレーション数 : {result.total_iterations}/{args.max_iter}\n"
-        f"出力ファイル     : [bold]{result.best_image}[/bold]"
+        f"イテレーション数 : {output.result.total_iterations}/{args.max_iter}\n"
+        f"出力ファイル     : [bold]{output.final_image}[/bold]"
         + (f"\nスコアグラフ     : [bold]{plot_path}[/bold]" if plot_path else ""),
         title="[bold green]✓ 完了[/bold green]",
         expand=False,
     ))
 
 
-def _run_split(args: argparse.Namespace, diagrams: list) -> None:
-    """俯瞰図＋ゾーン詳細図を複数枚生成する。"""
-    console.print(Rule(
-        f"[bold]Step 2  分割生成（{len(diagrams)} 枚: 俯瞰図 + ゾーン詳細）[/bold]"
-    ))
-    console.print(
-        f"  [yellow]ノード数がしきい値 {args.split_threshold} を超えたため、"
-        f"zone 単位で {len(diagrams)} 枚に分割します。[/yellow]"
-    )
-
-    outputs: list[tuple[str, Path, int]] = []
-    for idx, diag in enumerate(diagrams, start=1):
-        console.print(Rule(
-            f"[bold cyan]図 {idx}/{len(diagrams)}  {diag.title}[/bold cyan]"
-        ))
-        sub_dir = args.output_dir / diag.key
-        sub_stem = f"{args.input.stem}_{diag.key}"
-        result = pipeline.run(
-            topology_text=diag.text,
-            output_dir=sub_dir,
-            stem=sub_stem,
-            fmt=args.format,
-            max_iterations=args.max_iter,
-            threshold=args.threshold,
-            patience=args.patience,
-            zone_opacity=args.zone_opacity,
-            # 俯瞰図はゾーン単位の全体地図用プロンプトを使う（個別デバイスを展開しない）
-            system_prompt_file=(
-                "diagram-system-overview.md" if diag.key == "overview"
-                else "diagram-system.md"
-            ),
-        )
-        # ベスト画像を出力ルートへ集約
-        final_path = args.output_dir / f"{sub_stem}.{args.format}"
-        shutil.copy2(result.best_image, final_path)
-        outputs.append((diag.title, final_path, result.best_result.score))
-
-    # ── 分割サマリー ──────────────────────────────────────────────
+def _print_split_summary(args: argparse.Namespace, result: "service.D2VJobResult") -> None:
+    """分割生成（複数枚）の最終サマリー。"""
     summary = Table(title="分割生成サマリー", show_header=True, header_style="bold")
     summary.add_column("#", style="dim", width=4, justify="center")
     summary.add_column("図", overflow="fold")
     summary.add_column("スコア", width=8, justify="center")
     summary.add_column("出力ファイル", overflow="fold")
-    for i, (title, path, score) in enumerate(outputs, start=1):
+    for i, output in enumerate(result.outputs, start=1):
+        score = output.score
         color = "green" if score >= args.threshold else "yellow" if score >= 6 else "red"
-        summary.add_row(str(i), title, f"[{color}]{score}/10[/{color}]", str(path))
+        summary.add_row(
+            str(i), output.title, f"[{color}]{score}/10[/{color}]", str(output.final_image)
+        )
     console.print()
     console.print(summary)
     console.print(Panel(
-        f"生成枚数         : [bold]{len(outputs)}[/bold] 枚\n"
+        f"生成枚数         : [bold]{len(result.outputs)}[/bold] 枚\n"
         f"出力ディレクトリ : [bold]{args.output_dir}[/bold]",
         title="[bold green]✓ 完了[/bold green]",
         expand=False,
     ))
-
-
-# ---------------------------------------------------------------------------
-# v2d サブコマンド（vision-to-diagram: 画像 → YAML）
-# ---------------------------------------------------------------------------
 
 
 def run_v2d(argv: list[str]) -> None:
@@ -535,6 +414,67 @@ def run_v2d(argv: list[str]) -> None:
             title="[bold green]✓ 再描画完了[/bold green]",
             expand=False,
         ))
+
+
+# ---------------------------------------------------------------------------
+# serve サブコマンド（ブラウザ GUI: FastAPI + Uvicorn 起動）
+# ---------------------------------------------------------------------------
+
+
+def run_serve(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="d2v serve",
+        description="ブラウザ GUI（FastAPI）を起動します。",
+    )
+    ap.add_argument(
+        "--host",
+        default="127.0.0.1",
+        metavar="HOST",
+        help="バインドするホスト（デフォルト: 127.0.0.1）。外部公開は自己責任で",
+    )
+    ap.add_argument(
+        "--port", "-p",
+        type=int,
+        default=8000,
+        metavar="PORT",
+        help="待ち受けポート（デフォルト: 8000）",
+    )
+    ap.add_argument(
+        "--reload",
+        action="store_true",
+        help="コード変更を検知して自動リロード（開発用）",
+    )
+    args = ap.parse_args(argv)
+
+    try:
+        import uvicorn
+    except ModuleNotFoundError:
+        console.print(
+            "\n[bold red]✗ GUI に必要な依存がインストールされていません。[/bold red]\n"
+            "[dim]次のいずれかを実行してください:[/dim]\n"
+            "  [bold]uv sync --extra web[/bold]   [dim]（uv の場合）[/dim]\n"
+            "  [bold]pip install -e '.[web]'[/bold]   [dim]（pip の場合）[/dim]\n"
+        )
+        sys.exit(1)
+
+    url = f"http://{args.host}:{args.port}"
+    console.print(Panel(
+        f"URL              : [bold cyan]{url}[/bold cyan]\n"
+        f"ホスト           : [bold cyan]{args.host}[/bold cyan]\n"
+        f"ポート           : [bold cyan]{args.port}[/bold cyan]\n"
+        f"自動リロード     : "
+        + ("[bold cyan]あり[/bold cyan]" if args.reload else "[dim]なし[/dim]"),
+        title="[bold blue]d2v  ブラウザ GUI[/bold blue]",
+        expand=False,
+    ))
+    console.print("  [dim]停止するには Ctrl+C[/dim]\n")
+
+    uvicorn.run(
+        "d2v.web.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+    )
 
 
 if __name__ == "__main__":

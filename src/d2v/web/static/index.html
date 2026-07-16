@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>d2v — ネットワーク構成図 GUI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>d2v <span class="subtitle">ネットワーク構成図 GUI</span></h1>
+    <div class="meta" id="meta-bar">
+      <button id="history-btn" class="ghost-btn" type="button">履歴</button>
+      <span class="badge" id="provider-badge">provider: …</span>
+    </div>
+  </header>
+
+  <aside id="history-drawer" class="drawer" hidden>
+    <div class="drawer-head">
+      <span>ジョブ履歴</span>
+      <button id="history-refresh" class="link-btn" type="button">更新</button>
+      <button id="history-close" class="ghost-btn" type="button">×</button>
+    </div>
+    <ul id="history-list"><li class="dim">（まだありません）</li></ul>
+  </aside>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="d2v" role="tab">d2v: YAML → 図</button>
+    <button class="tab" data-tab="v2d" role="tab">v2d: 画像 → YAML</button>
+  </nav>
+
+  <main>
+    <!-- ============ d2v タブ ============ -->
+    <section class="panel active" id="panel-d2v" role="tabpanel">
+      <div class="layout">
+        <!-- 左: 入力・パラメータ -->
+        <div class="col-form">
+          <form id="d2v-form">
+            <fieldset>
+              <legend>入力トポロジ</legend>
+              <div class="radio-row">
+                <label><input type="radio" name="source" value="example" checked /> サンプル</label>
+                <label><input type="radio" name="source" value="upload" /> ファイル</label>
+                <label><input type="radio" name="source" value="text" /> 貼り付け</label>
+              </div>
+
+              <div class="src-block" data-src="example">
+                <select id="example-select"></select>
+              </div>
+              <div class="src-block" data-src="upload" hidden>
+                <input type="file" id="file-input" accept=".yaml,.yml" />
+              </div>
+              <div class="src-block" data-src="text" hidden>
+                <textarea id="yaml-text" rows="10" placeholder="iida-network-model YAML を貼り付け"></textarea>
+              </div>
+              <button type="button" class="link-btn" id="preview-btn">YAML をプレビュー欄に読み込む</button>
+            </fieldset>
+
+            <fieldset>
+              <legend>パラメータ</legend>
+              <div class="grid2">
+                <label>フォーマット
+                  <select id="p-format"><option value="png">png</option><option value="svg">svg</option></select>
+                </label>
+                <label>最大イテレーション
+                  <input type="number" id="p-max-iter" min="1" max="20" value="3" />
+                </label>
+                <label>合格閾値 (1-10)
+                  <input type="number" id="p-threshold" min="1" max="10" value="8" />
+                </label>
+                <label>patience
+                  <input type="number" id="p-patience" min="1" max="20" value="1" />
+                </label>
+              </div>
+
+              <label>モード
+                <select id="p-mode">
+                  <option value="auto">auto（自動判別）</option>
+                  <option value="single">single（1 枚固定）</option>
+                  <option value="split">split（分割）</option>
+                  <option value="focus">focus（注目ノード）</option>
+                  <option value="zone">zone（ゾーン限定）</option>
+                </select>
+              </label>
+
+              <div class="mode-opt" data-mode="split auto">
+                <label>分割しきい値
+                  <input type="number" id="p-split-threshold" min="1" value="40" />
+                </label>
+                <label class="checkbox"><input type="checkbox" id="p-no-split" /> 分割しない (--no-split)</label>
+              </div>
+
+              <div class="mode-opt" data-mode="focus" hidden>
+                <label>注目ノード（カンマ区切りの device-id）
+                  <input type="text" id="p-focus" placeholder="spine-01, spine-02" />
+                </label>
+                <label>ホップ数
+                  <input type="number" id="p-hops" min="1" max="5" value="1" />
+                </label>
+              </div>
+
+              <div class="mode-opt" data-mode="zone" hidden>
+                <label>ゾーン（カンマ区切り）
+                  <input type="text" id="p-zone" placeholder="dc-core, dc-fabric" />
+                </label>
+              </div>
+
+              <label>ゾーン背景の不透明度: <span id="opacity-val">0.4</span>
+                <input type="range" id="p-zone-opacity" min="0" max="1" step="0.05" value="0.4" />
+              </label>
+            </fieldset>
+
+            <button type="submit" id="run-btn" class="primary">▶ 生成する</button>
+            <button type="button" class="link-btn" id="share-btn">現在の設定を URL にコピー</button>
+          </form>
+        </div>
+
+        <!-- 右: 進捗・結果 -->
+        <div class="col-result">
+          <div id="input-preview-wrap" hidden>
+            <h3>入力プレビュー</h3>
+            <pre id="input-preview" class="code"></pre>
+          </div>
+
+          <div id="progress-wrap" hidden>
+            <h3>進捗 <span id="progress-state" class="badge"></span></h3>
+            <div class="spark" id="sparkline"></div>
+            <pre id="progress-log" class="log"></pre>
+          </div>
+
+          <div id="result-wrap" hidden>
+            <h3>結果</h3>
+            <div class="result-tabs" id="result-tabs"></div>
+            <div class="result-body">
+              <div class="img-view">
+                <img id="result-image" alt="生成された構成図" />
+              </div>
+              <div class="detail-tabs">
+                <button class="dtab active" data-d="image">画像</button>
+                <button class="dtab" data-d="dot">DOT</button>
+                <button class="dtab" data-d="eval">評価</button>
+              </div>
+              <pre id="detail-dot" class="code" hidden></pre>
+              <div id="detail-eval" hidden></div>
+              <div class="downloads" id="downloads"></div>
+            </div>
+          </div>
+
+          <p class="placeholder" id="d2v-idle">左のフォームで入力とパラメータを指定し、「生成する」を押してください。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ v2d タブ（Phase 4） ============ -->
+    <section class="panel" id="panel-v2d" role="tabpanel" hidden>
+      <div class="layout">
+        <!-- 左: 入力 -->
+        <div class="col-form">
+          <form id="v2d-form">
+            <fieldset>
+              <legend>入力画像</legend>
+              <div class="dropzone" id="v2d-dropzone">
+                <p>ここに画像をドラッグ＆ドロップ<br />または</p>
+                <input type="file" id="v2d-file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" />
+                <img id="v2d-preview" alt="プレビュー" hidden />
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>オプション</legend>
+              <label class="checkbox"><input type="checkbox" id="v2d-rerender" /> d2v で再描画（往復・LLM 使用）</label>
+              <label>再描画フォーマット
+                <select id="v2d-format"><option value="png">png</option><option value="svg">svg</option></select>
+              </label>
+              <label>正解 YAML（任意・精度計測用）
+                <textarea id="v2d-truth" rows="6" placeholder="正解の iida-network-model YAML を貼り付け（省略可）"></textarea>
+              </label>
+            </fieldset>
+
+            <button type="submit" id="v2d-run-btn" class="primary">▶ 画像から YAML を抽出</button>
+          </form>
+        </div>
+
+        <!-- 右: 進捗・結果 -->
+        <div class="col-result">
+          <div id="v2d-progress-wrap" hidden>
+            <h3>進捗 <span id="v2d-progress-state" class="badge"></span></h3>
+            <pre id="v2d-progress-log" class="log"></pre>
+          </div>
+
+          <div id="v2d-result-wrap" hidden>
+            <h3>抽出結果 <span id="v2d-summary" class="badge"></span></h3>
+
+            <div class="detail-tabs" id="v2d-detail-tabs">
+              <button class="vdtab active" data-v="yaml">YAML</button>
+              <button class="vdtab" data-v="notes">所見</button>
+              <button class="vdtab" data-v="metrics" hidden>精度</button>
+              <button class="vdtab" data-v="compare">元画像/再描画</button>
+            </div>
+
+            <pre id="v2d-yaml" class="code"></pre>
+            <div id="v2d-notes" hidden></div>
+            <div id="v2d-metrics" hidden></div>
+            <div id="v2d-compare" hidden>
+              <div class="compare-grid">
+                <figure><figcaption>元画像</figcaption><img id="v2d-original" alt="元画像" /></figure>
+                <figure id="v2d-rerender-fig" hidden><figcaption>d2v 再描画</figcaption><img id="v2d-rerender-img" alt="再描画" /></figure>
+              </div>
+            </div>
+
+            <div class="downloads" id="v2d-downloads"></div>
+            <button type="button" id="v2d-to-d2v" class="primary secondary" hidden>この YAML で d2v 図を生成 →</button>
+          </div>
+
+          <p class="placeholder" id="v2d-idle">画像を選択し、「画像から YAML を抽出」を押してください。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
