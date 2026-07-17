@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from d2v import icons, renderer
+from d2v import icons, renderer, zonelayout
 from d2v.errors import D2VError
 from d2v.parser import TopologyModel, load_model
 
@@ -195,6 +195,10 @@ def generate_dot(model: TopologyModel, *, title: str = "") -> str:
     lines.append("")
 
     # ── ゾーンごとに cluster を作ってノードを配置 ──────────────
+    # 2段階レイアウト Stage1: ゾーンの段・段内順を決定論的に確定する。
+    # 非空のときだけアンカー＋制約を注入し、それ以外は従来動作にフォールバックする。
+    placement = zonelayout.compute_zone_placement(model)
+
     # ゾーンの出現順を保持（入力順で決定論的にする）。zone 未設定は "" にまとめる。
     zone_order: list[str] = []
     zone_devices: dict[str, list[_YamlDict]] = {}
@@ -205,11 +209,22 @@ def generate_dot(model: TopologyModel, *, title: str = "") -> str:
             zone_order.append(zone)
         zone_devices[zone].append(dev)
 
-    for zi, zone in enumerate(zone_order):
-        devs = zone_devices[zone]
+    # 配色は入力順に固定（レイアウト順に依存させない）。
+    color_index = {zone: zi for zi, zone in enumerate(zone_order)}
+
+    # cluster の出力順を決める:
+    #   1) Stage1 の段・段内順（横順の決定論化。制約 DOT では横順を出さないため）
+    #   2) placement 対象外のゾーン（入力順）
+    #   3) ゾーン未設定（"" は最後にまとめて直接配置）
+    placed = placement.zones
+    remaining = [z for z in zone_order if z and z not in placement.tier_of]
+    emit_order = placed + remaining + ([""] if "" in zone_devices else [])
+
+    for zone in emit_order:
+        devs = zone_devices.get(zone, [])
         if zone:
-            bg, border, fontcolor = _zone_style(zi)
-            cid = _sanitize_cluster_id(zone, zi)
+            bg, border, fontcolor = _zone_style(color_index[zone])
+            cid = _sanitize_cluster_id(zone, color_index[zone])
             lines.append(f"    subgraph {cid} {{")
             lines.append(f"        label={_quote(zone)};")
             lines.append(f'        bgcolor="{bg}";')
@@ -217,11 +232,19 @@ def generate_dot(model: TopologyModel, *, title: str = "") -> str:
             lines.append(f'        fontcolor="{fontcolor}";')
             for dev in devs:
                 lines.append(_node_stmt(dev, indent="        "))
+            # Stage2: このゾーンが配置対象なら不可視アンカーを cluster 内へ置く。
+            if zone in placement.tier_of:
+                lines.append(f"        {zonelayout.anchor_decl(zone)}")
             lines.append("    }")
         else:
             # ゾーン未設定ノードは cluster に入れず直接置く
             for dev in devs:
                 lines.append(_node_stmt(dev, indent="    "))
+    lines.append("")
+
+    # 2段階レイアウト Stage2: ゾーン位置を固定する制約行を最上位に注入する。
+    for line in zonelayout.zone_constraint_dot(placement):
+        lines.append(f"    {line}")
     lines.append("")
 
     # ── 物理接続をエッジとして描画 ──────────────────────────

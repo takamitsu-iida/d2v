@@ -8,7 +8,7 @@ from pathlib import Path
 
 import graphviz
 
-from d2v import icons
+from d2v import icons, zonelayout
 from d2v.config import settings
 from d2v.errors import GraphvizNotFoundError
 
@@ -136,6 +136,207 @@ def emphasize_node_borders(dot_code: str, penwidth: float = 1.6) -> str:
         return dot_code
     at = m.end()
     return dot_code[:at] + f"\n    node [penwidth={penwidth}];" + dot_code[at:]
+
+
+# d2vzone 属性（cluster がどのゾーンかを示す）にマッチする正規表現
+_D2VZONE_RE = re.compile(r'd2vzone\s*=\s*"?([^"\s;]+)"?', re.IGNORECASE)
+
+# 2段階レイアウト制約を注入済みかを判定するマーカー
+_ZONE_CONSTRAINT_MARKER = "zone tier constraints"
+
+
+class _ZoneScan:
+    """DOT 走査で得たゾーン構造（cluster・ノード所属・ゾーン間接続）。"""
+
+    def __init__(self) -> None:
+        # cluster ごとの {"zone": str, "close": int(閉じ } の位置)}
+        self.clusters: list[dict] = []
+        # ノード名 → 所属ゾーン名
+        self.node_zone: dict[str, str] = {}
+        # ゾーン間接続のゾーン対（順不同、重複可）
+        self.pairs: list[tuple[str, str]] = []
+        # ルートグラフの閉じ } の位置（制約行の挿入先）
+        self.root_close: int = -1
+
+
+def _strip_token(token: str) -> str:
+    """ノード参照トークンを正規化する（ポート ``:x`` 除去・両端クォート除去）。"""
+    token = token.strip().split(":", 1)[0].strip()
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        token = token[1:-1]
+    return token
+
+
+def _scan_zone_dot(dot_code: str) -> _ZoneScan:
+    """DOT を走査して cluster の d2vzone・ノード所属・ゾーン間接続を収集する。
+
+    文字列・行コメント（``//`` / ``#``）・ブロックコメント（``/* */``）を無視し、
+    ``{`` / ``}`` / ``;`` で区切ったステートメント単位に解析する。
+    """
+    scan = _ZoneScan()
+    stack: list[dict] = []  # フレーム: {"zone": str, "subgraph": bool}
+    node_frames: list[tuple[str, list[dict]]] = []  # (ノード名, その時点のstack写し)
+
+    n = len(dot_code)
+    i = 0
+    buf: list[str] = []
+
+    def cur_zone() -> str:
+        for fr in reversed(stack):
+            if fr["zone"]:
+                return fr["zone"]
+        return ""
+
+    def flush() -> None:
+        stmt = "".join(buf).strip()
+        buf.clear()
+        if not stmt:
+            return
+        core = stmt.split("[", 1)[0]
+        # d2vzone 属性 → 現在の（最も内側の）cluster フレームに設定
+        mz = _D2VZONE_RE.search(stmt)
+        if mz and "=" in core and "->" not in core and "--" not in core:
+            if stack:
+                stack[-1]["zone"] = mz.group(1)
+            return
+        # エッジ（-> / --）→ ゾーン間接続を収集
+        if "->" in core or "--" in core:
+            parts = re.split(r"->|--", core)
+            endpoints = [_strip_token(p) for p in parts if _strip_token(p)]
+            for a, b in zip(endpoints, endpoints[1:]):
+                scan.pairs.append((a, b))
+            return
+        # ノード宣言（属性リスト前に = を含まない）→ 所属ゾーンを記録
+        if "=" in core:
+            return
+        tokens = core.split()
+        if not tokens:
+            return
+        name = _strip_token(tokens[0])
+        if not name or name.lower() in _DOT_KEYWORDS:
+            return
+        node_frames.append((name, list(stack)))
+
+    while i < n:
+        c = dot_code[i]
+        # 文字列リテラル
+        if c in "\"'":
+            buf.append(c)
+            i += 1
+            while i < n:
+                buf.append(dot_code[i])
+                if dot_code[i] == c and dot_code[i - 1] != "\\":
+                    i += 1
+                    break
+                i += 1
+            continue
+        # コメント
+        if c == "/" and i + 1 < n and dot_code[i + 1] == "/":
+            while i < n and dot_code[i] != "\n":
+                i += 1
+            continue
+        if c == "#":
+            while i < n and dot_code[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and dot_code[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (dot_code[i] == "*" and dot_code[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        # 構造文字
+        if c == "{":
+            header = "".join(buf)
+            buf.clear()
+            stack.append({"zone": "", "subgraph": "subgraph" in header.lower()})
+            i += 1
+            continue
+        if c == "}":
+            flush()
+            frame = stack.pop() if stack else {"zone": "", "subgraph": False}
+            if frame.get("zone"):
+                scan.clusters.append({"zone": frame["zone"], "close": i})
+            if not stack:
+                scan.root_close = i
+            i += 1
+            continue
+        if c == ";":
+            flush()
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+
+    # ノード → ゾーン（最も内側の非空ゾーンを採用）を解決
+    for name, frames in node_frames:
+        zone = ""
+        for fr in reversed(frames):
+            if fr["zone"]:
+                zone = fr["zone"]
+                break
+        if zone:
+            scan.node_zone[name] = zone
+    return scan
+
+
+# DOT のキーワード（ノード宣言と誤認しないよう除外する）
+_DOT_KEYWORDS = {
+    "node", "edge", "graph", "subgraph", "digraph", "strict", "rank",
+}
+
+
+def inject_zone_constraints(dot_code: str) -> str:
+    """LLM 生成 DOT に 2 段階レイアウトのゾーン制約を後処理注入する。
+
+    各 cluster の ``d2vzone="<zone>"`` 属性でゾーンを識別し、cluster 内ノードと
+    エッジからゾーン間接続を集約して段配置（:mod:`d2v.zonelayout`）を求める。その後、
+    各 cluster 内へ不可視アンカーを、グラフ最上位へ段の ``rank``・順序制約を挿入する。
+
+    ``d2vzone`` を持つ cluster が無い / ゾーンが 2 個未満 / ゾーン間接続が無い / 既に
+    注入済み等の場合は、元のコードをそのまま返す（後方互換のフォールバック）。
+    """
+    if _ZONE_CONSTRAINT_MARKER in dot_code or "d2vzone" not in dot_code:
+        return dot_code
+
+    scan = _scan_zone_dot(dot_code)
+    if len({c["zone"] for c in scan.clusters}) < 2:
+        return dot_code
+
+    zone_pairs = [
+        (scan.node_zone.get(a, ""), scan.node_zone.get(b, ""))
+        for a, b in scan.pairs
+    ]
+    placement = zonelayout.compute_zone_placement_from_pairs(zone_pairs)
+    if placement.is_empty():
+        return dot_code
+
+    # 挿入は文字位置がずれないよう、末尾（大きい位置）から順に適用する。
+    inserts: list[tuple[int, str]] = []
+
+    # 各 cluster 内へ不可視アンカーを挿入（配置対象ゾーンのみ）。
+    for cluster in scan.clusters:
+        zone = cluster["zone"]
+        if zone in placement.tier_of:
+            inserts.append(
+                (cluster["close"], f"    {zonelayout.anchor_decl(zone)}\n")
+            )
+
+    # グラフ最上位へ段の rank/順序制約を挿入。
+    if scan.root_close >= 0:
+        constraint = "\n".join(
+            f"    {ln}" for ln in zonelayout.zone_constraint_dot(placement)
+        )
+        if constraint:
+            inserts.append((scan.root_close, constraint + "\n"))
+
+    if not inserts:
+        return dot_code
+
+    result = dot_code
+    for pos, text in sorted(inserts, key=lambda t: t[0], reverse=True):
+        result = result[:pos] + text + result[pos:]
+    return result
 
 
 # 凡例に載せるデバイス種別の並び順と日本語ラベル（README のデバイス表に準拠）。
@@ -371,6 +572,8 @@ def render(
     """
     # 凡例掲載対象の種別は、アイコン注入で d2vtype が消える前に把握しておく
     types = legend_types(dot_code) if show_legend else []
+    # 2段階レイアウト: d2vzone 付き cluster があればゾーン段制約を注入する（無ければ素通し）
+    dot_code = inject_zone_constraints(dot_code)
     # cluster の style="filled" を除去して淡い bgcolor を優先させてから透過を付与する
     dot_code = neutralize_cluster_fill(dot_code)
     dot_code = remove_edge_arrows(dot_code)

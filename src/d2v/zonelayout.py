@@ -20,6 +20,7 @@ Graphviz ``dot`` が階層配置した副産物として決まり、実行ごと
 from __future__ import annotations
 
 import shlex
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -31,8 +32,9 @@ if TYPE_CHECKING:
 # アンカーノード ID の接頭辞。実デバイス ID と衝突しないよう記号を含める。
 _ANCHOR_PREFIX = "__za_"
 
-# 不可視アンカーノードの属性（点として扱い、面積・描画を持たせない）。
-_ANCHOR_ATTRS = "style=invis, shape=point, width=0, height=0"
+# 不可視アンカーノードの属性（微小な固定サイズの点として扱い、描画はしない）。
+# 完全な zero-size にすると spline 経路計算が破綻して警告が出るため、極小値を与える。
+_ANCHOR_ATTRS = 'style=invis, shape=point, width=0.01, height=0.01, fixedsize=true'
 
 
 @dataclass(frozen=True)
@@ -136,19 +138,14 @@ def _parse_plain_positions(plain: str) -> dict[str, tuple[float, float]]:
     return positions
 
 
-def compute_zone_placement(model: TopologyModel) -> ZonePlacement:
-    """Stage 1: ゾーングラフを ``dot`` で配置し、段・段内順を確定する。
+def _placement_from_weights(weights: dict[tuple[str, str], int]) -> ZonePlacement:
+    """ゾーン対→接続本数の重みから :class:`ZonePlacement` を算出する（Stage1 の中核）。
 
-    以下のいずれかに該当する場合は空の :class:`ZonePlacement` を返し、呼び出し側は
-    従来動作にフォールバックする:
-
-    - ゾーン間接続が存在しない
-    - 配置対象ゾーンが 2 個未満
-    - ``dot`` の実行・座標解析に失敗した
+    ゾーングラフを ``dot`` で配置し、y（段）・x（段内順）から段構成を決める。
+    ゾーンが 2 個未満・重みが空・``dot`` 実行や座標解析に失敗した場合は空を返す。
 
     plain 形式では y 軸は上向き（原点が左下）なので、y が大きいゾーンほど上段になる。
     """
-    weights = _inter_zone_weights(model)
     zones = sorted({z for pair in weights for z in pair})
     if not weights or len(zones) < 2:
         return ZonePlacement()
@@ -187,14 +184,51 @@ def compute_zone_placement(model: TopologyModel) -> ZonePlacement:
     return ZonePlacement(tiers=tiers, tier_of=tier_of, order_in_tier=order_in_tier)
 
 
+def compute_zone_placement(model: TopologyModel) -> ZonePlacement:
+    """Stage 1: モデルのゾーン間接続からゾーングラフを配置し、段・段内順を確定する。
+
+    以下のいずれかに該当する場合は空の :class:`ZonePlacement` を返し、呼び出し側は
+    従来動作にフォールバックする:
+
+    - ゾーン間接続が存在しない
+    - 配置対象ゾーンが 2 個未満
+    - ``dot`` の実行・座標解析に失敗した
+    """
+    return _placement_from_weights(_inter_zone_weights(model))
+
+
+def compute_zone_placement_from_pairs(
+    pairs: Iterable[tuple[str, str]],
+) -> ZonePlacement:
+    """Stage 1（DOT 由来）: ゾーン対の列から段・段内順を確定する。
+
+    LLM 生成 DOT のように ``TopologyModel`` を持たない経路向け。各要素は
+    ``(zoneA, zoneB)`` のゾーン対で、空文字・同一ゾーンの対は無視する。方向は
+    名前昇順に正規化して集約する。
+    """
+    weights: dict[tuple[str, str], int] = {}
+    for a, b in pairs:
+        if not a or not b or a == b:
+            continue
+        key = (a, b) if a < b else (b, a)
+        weights[key] = weights.get(key, 0) + 1
+    return _placement_from_weights(weights)
+
+
+
 def zone_constraint_dot(
     placement: ZonePlacement,
     zone_anchor: dict[str, str] | None = None,
 ) -> list[str]:
-    """Stage 2: ゾーン位置を固定する制約 DOT 行を生成する。
+    """Stage 2: ゾーンの段（縦順）を固定する制約 DOT 行を生成する。
 
     生成する行は本図のグラフ最上位（各 cluster の外側）に配置する。アンカーノード
     自体の宣言（:func:`anchor_decl`）は各 cluster 内に置いておくこと。
+
+    段内の**左右順**は、クラスタ全幅を横断する不可視エッジが ``dot`` の spline 経路
+    計算を破綻させる（"Unable to reclaim box space" 警告）ため、ここでは DOT へは
+    出力しない。左右順は呼び出し側が cluster の出力順で決定論的に制御する
+    （:attr:`ZonePlacement.order_in_tier` を参照）。
 
     Args:
         placement: :func:`compute_zone_placement` の結果。
@@ -204,7 +238,7 @@ def zone_constraint_dot(
     Returns:
         DOT 行のリスト（空の placement では空リスト）。以下を含む:
 
-        - 各段の ``{rank=same; ... [style=invis]; }``（段内順を不可視チェインで固定）
+        - 各段の ``{ rank=same; ... }``（同段を同一ランクに揃える）
         - 隣接段どうしを結ぶ不可視エッジ（段の上下順を固定）
     """
     if placement.is_empty():
@@ -214,16 +248,13 @@ def zone_constraint_dot(
 
     lines: list[str] = ["// --- zone tier constraints (2-stage layout) ---"]
 
-    # 各段: rank=same で同段に揃え、不可視チェインで段内左右順を固定する。
+    # 各段: rank=same で同段を同一ランクに揃える（左右順は cluster 出力順で担保）。
     for tier in placement.tiers:
         anchors = [zone_anchor[z] for z in tier if z in zone_anchor]
         if not anchors:
             continue
-        if len(anchors) == 1:
-            lines.append(f'{{ rank=same; "{anchors[0]}"; }}')
-        else:
-            chain = " -> ".join(f'"{a}"' for a in anchors)
-            lines.append(f"{{ rank=same; {chain} [style=invis]; }}")
+        members = " ".join(f'"{a}";' for a in anchors)
+        lines.append(f"{{ rank=same; {members} }}")
 
     # 隣接段: 各段の先頭アンカーどうしを不可視エッジで結び、上下順を固定する。
     for upper, lower in zip(placement.tiers, placement.tiers[1:]):

@@ -304,6 +304,19 @@ def layout_directive(diagram: _YamlDict) -> str:
         return ""
     layout = str(diagram.get("layout", "")).strip().lower()
 
+    if layout == "zoned":
+        return "\n".join([
+            "## 図レイアウト指定（ユーザー指定・厳守）\n",
+            "ゾーン（`subgraph cluster`）の相対位置を決定論的に固定するため、"
+            "**各 cluster に必ず `d2vzone=\"<ゾーン名>\";` 属性を付与**してください"
+            "（`<ゾーン名>` は各デバイスの zone フィールドの値そのまま）。",
+            "- 例: `subgraph cluster_core { label=\"Core LAN\"; d2vzone=\"core\"; ... }`",
+            "- ノード配置・見た目は通常どおり自由に最適化してよい。段の固定は"
+            "後処理が `d2vzone` を手掛かりに自動で行うため、`{rank=same}` 等の"
+            "ゾーン段指定を自前で書く必要はない。",
+            "",
+        ])
+
     if layout in ("star", "radial"):
         center = str(diagram.get("center-zone", "")).strip()
         lines = [
