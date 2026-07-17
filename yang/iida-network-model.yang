@@ -14,7 +14,20 @@ module iida-network-model {
   contact "support@iida.com";
   description
     "A concise YANG model for representing network topology across physical, Layer 2, and Layer 3.";
-
+  revision "2026-07-17" {
+    description "IPv6 support: generalize inet:ipv4-address/ipv4-prefix to
+                 inet:ip-address/ip-prefix, widen prefix-length to 0..128,
+                 and rename ipv4-routing container to protocol-agnostic routing.
+                 Also fix port-type enum labels (copper/fiber).
+                 Redundancy: add layer2-layer/link-aggregation (LAG/LACP, MLAG)
+                 and layer3-layer/first-hop-redundancy (VRRP/HSRP/GLBP).
+                 Dynamic routing: add layer3-layer/routing-config (BGP, OSPF,
+                 redistribution) and reusable layer3-layer/route-policy.
+                 Management: add network-model/management (mgmt VLAN, per-device
+                 mgmt IP/gateway, in-band mgmt IF, mgmt loopback, out-of-band).
+                 Add optional physical-connection endpoint lag-ref to explicitly
+                 mark a connection as a link-aggregation member.";
+  }
   revision "2026-07-01" {
     description "Add asn/loopback to device, ip-address to interface,
                  ethernet enum to port-type, and replace flat connection
@@ -24,6 +37,38 @@ module iida-network-model {
   revision "2023-11-20" {
     description "Initial version, inspired by OpenConfig-like structure.";
   }
+
+  // ===========================================================================
+  // 改善計画 (Improvement Plan) — 進捗管理用
+  // ---------------------------------------------------------------------------
+  // 企業向けネットワークの「構成定義」と「運用管理」を充足させるための
+  // 優先度★★★の追加項目。着手時にステータスを更新すること。
+  //   [ ] TODO   /  [~] IN-PROGRESS  /  [x] DONE
+  //
+  // -- 構成定義 (Design) --
+  //   [x] IPv6 対応
+  //         inet:ipv4-* を inet:ip-address / inet:ip-prefix へ一般化し、
+  //         prefix-length を 0..128 へ拡張。デュアルスタックを表現可能にした。
+  //   [x] 冗長化 (Redundancy)
+  //         ゲートウェイ冗長 (VRRP/HSRP/GLBP) を layer3-layer/first-hop-redundancy、
+  //         リンク集約 (LAG/LACP, MLAG) を layer2-layer/link-aggregation として追加した。
+  //   [x] ダイナミックルーティング (Dynamic Routing)
+  //         layer3-layer に routing-config (BGP neighbor/peer-group/address-family,
+  //         OSPF area, redistribution) と再利用可能な route-policy を追加した。
+  //
+  // -- 運用管理 (Operations) --
+  //   [x] 管理系設定 (Management)
+  //         network-model/management を新設。管理 VLAN、デバイス別の管理IP/ゲートウェイ、
+  //         In-band 管理IF、管理用ループバック、Out-of-Band 管理を追加した。
+  //   [ ] 監視・テレメトリ (Monitoring / Telemetry)
+  //         SNMP (community/v3)、Syslog 宛先、NetFlow/sFlow、
+  //         ストリーミングテレメトリ。
+  //   [ ] AAA / アクセス管理
+  //         TACACS+/RADIUS サーバ、ローカルユーザ、権限レベル。
+  //   [ ] 運用状態 (Operational State / state data)
+  //         admin-status / oper-status など config false データ。
+  //         現状は明示的に割愛しているため運用管理向けに追加する。
+  // ===========================================================================
 
   // ===========================================================================
   // Top-level container for the entire network configuration
@@ -103,8 +148,8 @@ module iida-network-model {
           description "BGP Autonomous System Number assigned to this device.";
         }
         leaf loopback {
-          type inet:ipv4-prefix;
-          description "Primary loopback IP address in CIDR notation (e.g., 10.0.0.1/32).";
+          type inet:ip-prefix;
+          description "Primary loopback IP address in CIDR notation (e.g., 10.0.0.1/32, 2001:db8::1/128).";
         }
         leaf zone {
           type string {
@@ -125,9 +170,9 @@ module iida-network-model {
           }
           leaf port-type {
             type enumeration {
-              enum "ethernet";     // Generic Ethernet (media type unspecified)
-              enum "ethernet-铜"; // Copper Ethernet
-              enum "ethernet-光"; // Fiber Ethernet
+              enum "ethernet";          // Generic Ethernet (media type unspecified)
+              enum "ethernet-copper";   // Copper Ethernet
+              enum "ethernet-fiber";    // Fiber Ethernet
               enum "serial";
               enum "other";
             }
@@ -143,9 +188,9 @@ module iida-network-model {
             description "Nominal speed of the port in Gbps.";
           }
           leaf ip-address {
-            type inet:ipv4-prefix;
+            type inet:ip-prefix;
             description "IP address with prefix length assigned to this interface
-                         in CIDR notation (e.g., 10.1.0.0/31, 10.0.0.1/32).";
+                         in CIDR notation (e.g., 10.1.0.0/31, 10.0.0.1/32, 2001:db8::1/64).";
           }
           // 管理状態、運用状態など、OpenConfigではstateデータになるような項目は今回は割愛。
         }
@@ -174,6 +219,18 @@ module iida-network-model {
               path "../../../device[device-id=current()/../device-id]/interface/interface-id";
             }
             description "Identifier of the interface on the endpoint device.";
+          }
+          leaf lag-ref {
+            type leafref {
+              path "../../../../layer2-layer/link-aggregation[device-id=current()/../device-id]/lag-id";
+            }
+            description
+              "Optional explicit reference to the link-aggregation group (on this
+               endpoint's device) that this connection is a member of. When set,
+               it authoritatively marks the connection as a LAG member link,
+               removing the need to infer membership from interface-id matching.
+               Optional: if omitted, LAG membership is inferred from the device's
+               link-aggregation/member-interface list.";
           }
         }
         leaf cable-type {
@@ -266,6 +323,87 @@ module iida-network-model {
         }
         // STP settings, EtherChannel etc. can be added here
       }
+
+      list link-aggregation {
+        key "device-id lag-id";
+        description
+          "Link aggregation groups (LAG/LACP) bundling multiple physical
+           member interfaces into one logical link. Optionally extended to a
+           multi-chassis LAG (MLAG/vPC/MC-LAG) spanning two devices.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device on which this aggregation group is configured.";
+        }
+        leaf lag-id {
+          type string {
+            pattern '[a-zA-Z0-9_./-]+';
+            length "1..128";
+          }
+          description "Logical aggregate interface identifier (e.g., Po1, ae0, bond0).";
+        }
+        leaf mode {
+          type enumeration {
+            enum "static";        // Manual/static bundling (no LACP)
+            enum "lacp-active";   // LACP, actively initiates
+            enum "lacp-passive";  // LACP, responds only
+          }
+          description "Aggregation mode.";
+        }
+        leaf lacp-rate {
+          when "../mode = 'lacp-active' or ../mode = 'lacp-passive'";
+          type enumeration {
+            enum "slow"; // 30s
+            enum "fast"; // 1s
+          }
+          description "LACPDU transmit rate (only meaningful for LACP modes).";
+        }
+        leaf min-links {
+          type uint16;
+          description "Minimum number of active member links to keep the bundle up.";
+        }
+        list member-interface {
+          key "interface-id";
+          description "Physical interfaces that are members of this aggregate.";
+          leaf interface-id {
+            type leafref {
+              path "../../../../physical-layer/device[device-id=current()/../../device-id]/interface/interface-id";
+            }
+            description "Member physical interface on the aggregation device.";
+          }
+        }
+        container mlag {
+          description "Multi-chassis LAG (MLAG/vPC/MC-LAG) peering settings.";
+          leaf enabled {
+            type boolean;
+            default "false";
+            description "Whether this aggregate participates in a multi-chassis LAG.";
+          }
+          leaf domain-id {
+            when "../enabled = 'true'";
+            type string {
+              length "1..64";
+            }
+            description "MLAG/vPC domain identifier shared by the peer pair.";
+          }
+          leaf peer-device-id {
+            when "../enabled = 'true'";
+            type leafref {
+              path "../../../../physical-layer/device/device-id";
+            }
+            description "Peer device forming the multi-chassis pair.";
+          }
+          leaf peer-lag-id {
+            when "../enabled = 'true'";
+            type string {
+              pattern '[a-zA-Z0-9_./-]+';
+              length "1..128";
+            }
+            description "Corresponding aggregate interface id on the peer device.";
+          }
+        }
+      }
     } // end layer2-layer
 
     // ===========================================================================
@@ -282,7 +420,7 @@ module iida-network-model {
           description "Unique identifier for the subnet.";
         }
         leaf prefix {
-          type inet:ipv4-prefix; // Example: 192.168.1.0/24
+          type inet:ip-prefix; // Example: 192.168.1.0/24, 2001:db8::/64
           description "IP network prefix in CIDR format.";
         }
         leaf description {
@@ -317,14 +455,14 @@ module iida-network-model {
           key "ip-address";
           description "IP addresses configured on this interface.";
           leaf ip-address {
-            type inet:ipv4-address; // Example: 192.168.1.1
+            type inet:ip-address; // Example: 192.168.1.1, 2001:db8::1
             description "IP address configured on the interface.";
           }
           leaf prefix-length {
             type uint8 {
-              range "0..32";
+              range "0..128";
             }
-            description "Prefix length for the IP address.";
+            description "Prefix length for the IP address (0..32 for IPv4, 0..128 for IPv6).";
           }
           leaf associated-subnet-id {
             type leafref {
@@ -340,8 +478,8 @@ module iida-network-model {
           description "If IP routing is enabled on this interface.";
         }
         // Example for routing protocols (simplified)
-        container ipv4-routing {
-          description "IPv4 routing settings for the interface.";
+        container routing {
+          description "Layer 3 routing settings for the interface (IPv4/IPv6).";
           leaf ospf-area {
             type string;
             description "OSPF area ID configured on this interface (e.g., '0.0.0.0', '1').";
@@ -360,17 +498,17 @@ module iida-network-model {
           description "Reference to the physical host device.";
         }
         leaf primary-ip-address {
-          type inet:ipv4-address;
+          type inet:ip-address;
           description "Primary IP address of the host.";
         }
         leaf primary-prefix-length {
           type uint8 {
-            range "0..32";
+            range "0..128";
           }
-          description "Prefix length for the primary IP address.";
+          description "Prefix length for the primary IP address (0..32 for IPv4, 0..128 for IPv6).";
         }
         leaf default-gateway {
-          type inet:ipv4-address;
+          type inet:ip-address;
           description "Default gateway IP address for the host.";
         }
         leaf associated-subnet-id {
@@ -392,11 +530,11 @@ module iida-network-model {
           description "Device on which this static route is configured.";
         }
         leaf destination-prefix {
-          type inet:ipv4-prefix;
+          type inet:ip-prefix;
           description "Destination network prefix in CIDR format.";
         }
         leaf next-hop {
-          type inet:ipv4-address;
+          type inet:ip-address;
           description "Next-hop IP address.";
         }
         leaf administrative-distance {
@@ -405,8 +543,331 @@ module iida-network-model {
           description "Administrative distance of the route.";
         }
       }
-      // Global routing protocol configurations (OSPF, BGP, etc.) can be added here
+
+      list first-hop-redundancy {
+        key "device-id interface-id group-id";
+        description
+          "First-hop gateway redundancy (VRRP/HSRP/GLBP) providing a shared
+           virtual IP across multiple routers for host default gateways.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device participating in this redundancy group.";
+        }
+        leaf interface-id {
+          type leafref {
+            path "../../../physical-layer/device[device-id=current()/../device-id]/interface/interface-id";
+          }
+          description "Interface on which the redundancy group runs.";
+        }
+        leaf group-id {
+          type uint16 {
+            range "0..4095";
+          }
+          description "Redundancy group / VRID / HSRP group number.";
+        }
+        leaf protocol {
+          type enumeration {
+            enum "vrrp";
+            enum "hsrp";
+            enum "glbp";
+          }
+          description "First-hop redundancy protocol in use.";
+        }
+        leaf virtual-ip-address {
+          type inet:ip-address;
+          description "Shared virtual IP address acting as the default gateway.";
+        }
+        leaf priority {
+          type uint8;
+          default "100";
+          description "Election priority; higher becomes master/active.";
+        }
+        leaf preempt {
+          type boolean;
+          default "true";
+          description "Whether a higher-priority node preempts the current master.";
+        }
+      }
+
+      list route-policy {
+        key "name";
+        description
+          "Reusable routing policies (route-maps) referenced by BGP peers and
+           redistribution to filter or manipulate route attributes.";
+        leaf name {
+          type string {
+            length "1..128";
+          }
+          description "Unique policy name.";
+        }
+        leaf description {
+          type string;
+          description "Human-readable description of the policy.";
+        }
+        list statement {
+          key "sequence";
+          description "Ordered policy clauses evaluated by ascending sequence.";
+          leaf sequence {
+            type uint32;
+            description "Evaluation order of this clause.";
+          }
+          leaf action {
+            type enumeration {
+              enum "permit";
+              enum "deny";
+            }
+            description "Whether matching routes are accepted or rejected.";
+          }
+          leaf match-prefix {
+            type inet:ip-prefix;
+            description "Match routes falling within this prefix (simplified single match).";
+          }
+          leaf set-local-preference {
+            type uint32;
+            description "BGP LOCAL_PREF to set on matched routes.";
+          }
+          leaf set-metric {
+            type uint32;
+            description "Metric/MED to set on matched routes.";
+          }
+        }
+      }
+
+      list routing-config {
+        key "device-id";
+        description
+          "Per-device dynamic routing configuration (BGP/OSPF) and route
+           redistribution. Per-interface OSPF area assignment lives in
+           layer3-interface-config/routing/ospf-area.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device on which these routing protocols run.";
+        }
+        leaf router-id {
+          type inet:ip-address;
+          description "Global router ID used by OSPF/BGP.";
+        }
+
+        container bgp {
+          presence "BGP is enabled on this device.";
+          description "BGP configuration for this device.";
+          leaf local-asn {
+            type uint32;
+            mandatory true;
+            description "Local BGP Autonomous System Number.";
+          }
+          list peer-group {
+            key "name";
+            description "Reusable BGP peer templates shared by neighbors.";
+            leaf name {
+              type string {
+                length "1..64";
+              }
+              description "Peer group name.";
+            }
+            leaf peer-asn {
+              type uint32;
+              description "Remote ASN for members (omit for internal/iBGP).";
+            }
+            leaf import-policy {
+              type leafref {
+                path "../../../../route-policy/name";
+              }
+              description "Inbound route policy applied to received routes.";
+            }
+            leaf export-policy {
+              type leafref {
+                path "../../../../route-policy/name";
+              }
+              description "Outbound route policy applied to advertised routes.";
+            }
+          }
+          list neighbor {
+            key "neighbor-address";
+            description "BGP neighbors (sessions).";
+            leaf neighbor-address {
+              type inet:ip-address;
+              description "Neighbor peer IP address.";
+            }
+            leaf peer-asn {
+              type uint32;
+              description "Remote ASN of the neighbor.";
+            }
+            leaf peer-group {
+              type leafref {
+                path "../../peer-group/name";
+              }
+              description "Peer group this neighbor inherits configuration from.";
+            }
+            leaf description {
+              type string;
+              description "Neighbor description.";
+            }
+            leaf-list address-family {
+              type enumeration {
+                enum "ipv4-unicast";
+                enum "ipv6-unicast";
+                enum "l2vpn-evpn";
+              }
+              description "Address families negotiated with this neighbor.";
+            }
+            leaf import-policy {
+              type leafref {
+                path "../../../../route-policy/name";
+              }
+              description "Inbound route policy (overrides peer-group).";
+            }
+            leaf export-policy {
+              type leafref {
+                path "../../../../route-policy/name";
+              }
+              description "Outbound route policy (overrides peer-group).";
+            }
+          }
+        }
+
+        container ospf {
+          presence "OSPF is enabled on this device.";
+          description "OSPFv2/v3 configuration for this device.";
+          leaf process-id {
+            type string;
+            description "OSPF process identifier.";
+          }
+          list area {
+            key "area-id";
+            description "OSPF areas configured on this device.";
+            leaf area-id {
+              type string;
+              description "Area identifier (e.g., '0.0.0.0', '1').";
+            }
+            leaf area-type {
+              type enumeration {
+                enum "standard";
+                enum "stub";
+                enum "nssa";
+              }
+              default "standard";
+              description "Area type.";
+            }
+          }
+        }
+
+        list redistribution {
+          key "source-protocol destination-protocol";
+          description "Redistribution of routes from one protocol into another.";
+          leaf source-protocol {
+            type enumeration {
+              enum "connected";
+              enum "static";
+              enum "ospf";
+              enum "bgp";
+              enum "rip";
+            }
+            description "Protocol whose routes are redistributed.";
+          }
+          leaf destination-protocol {
+            type enumeration {
+              enum "ospf";
+              enum "bgp";
+            }
+            description "Protocol into which routes are injected.";
+          }
+          leaf route-policy {
+            type leafref {
+              path "../../../route-policy/name";
+            }
+            description "Optional policy to filter/modify redistributed routes.";
+          }
+          leaf metric {
+            type uint32;
+            description "Metric assigned to redistributed routes.";
+          }
+        }
+      }
     } // end layer3-layer
+
+    // ===========================================================================
+    // Management Plane (Management interfaces, OOB, mgmt VLAN, mgmt loopback)
+    // ===========================================================================
+    container management {
+      description
+        "Management-plane configuration used for reaching and operating devices:
+         in-band and out-of-band management interfaces, management VLAN, and
+         management/monitoring loopbacks.";
+
+      leaf management-vlan {
+        type leafref {
+          path "../../layer2-layer/vlan/vlan-id";
+        }
+        description "Global VLAN used for in-band management traffic.";
+      }
+
+      list device-management {
+        key "device-id";
+        description "Per-device management-plane settings.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device these management settings apply to.";
+        }
+        leaf management-ip-address {
+          type inet:ip-address;
+          description "Primary management IP address of the device.";
+        }
+        leaf management-prefix-length {
+          type uint8 {
+            range "0..128";
+          }
+          description "Prefix length for the management IP (0..32 IPv4, 0..128 IPv6).";
+        }
+        leaf management-gateway {
+          type inet:ip-address;
+          description "Default gateway used by the management interface.";
+        }
+        leaf in-band-interface-id {
+          type leafref {
+            path "../../../physical-layer/device[device-id=current()/../device-id]/interface/interface-id";
+          }
+          description "In-band management interface (e.g., a routed SVI) on this device.";
+        }
+        leaf management-loopback {
+          type inet:ip-prefix;
+          description "Loopback dedicated to management/monitoring reachability.";
+        }
+        container out-of-band {
+          description "Dedicated out-of-band (OOB) management access.";
+          leaf enabled {
+            type boolean;
+            default "false";
+            description "Whether a dedicated OOB management path exists.";
+          }
+          leaf interface-id {
+            when "../enabled = 'true'";
+            type leafref {
+              path "../../../../physical-layer/device[device-id=current()/../../device-id]/interface/interface-id";
+            }
+            description "Dedicated OOB management interface on this device.";
+          }
+          leaf ip-address {
+            when "../enabled = 'true'";
+            type inet:ip-address;
+            description "IP address assigned to the OOB management interface.";
+          }
+          leaf prefix-length {
+            when "../enabled = 'true'";
+            type uint8 {
+              range "0..128";
+            }
+            description "Prefix length for the OOB management IP.";
+          }
+        }
+      }
+    } // end management
 
   } // end network-model
 }

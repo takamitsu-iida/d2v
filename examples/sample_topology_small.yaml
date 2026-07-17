@@ -43,6 +43,17 @@ network-model:
           - interface-id: "GigabitEthernet1/0/2"
             description: "To Office Switch"
             ip-address: "10.1.3.1/30"
+          - interface-id: "GigabitEthernet1/0/23"
+            description: "LAG member 1 (Port-channel1)"
+            port-type: ethernet-fiber
+            port-speed-gbps: 10
+          - interface-id: "GigabitEthernet1/0/24"
+            description: "LAG member 2 (Port-channel1)"
+            port-type: ethernet-fiber
+            port-speed-gbps: 10
+          - interface-id: "Management0"
+            description: "Out-of-band management port"
+            port-type: ethernet-copper
 
       - device-id: "dmz-sw-01"
         device-name: "DMZ Switch"
@@ -72,6 +83,14 @@ network-model:
             description: "Uplink to Core"
           - interface-id: "GigabitEthernet0/2"
             description: "To Client PC"
+          - interface-id: "GigabitEthernet0/23"
+            description: "LAG member 1 (Port-channel1)"
+            port-type: ethernet-fiber
+            port-speed-gbps: 10
+          - interface-id: "GigabitEthernet0/24"
+            description: "LAG member 2 (Port-channel1)"
+            port-type: ethernet-fiber
+            port-speed-gbps: 10
 
       - device-id: "pc-01"
         device-name: "Client PC"
@@ -118,12 +137,64 @@ network-model:
           - device-id: "office-sw-01"
             interface-id: "GigabitEthernet0/1"
 
+      # LAG (Port-channel1) member links: core-sw-01 <-> office-sw-01
+      # lag-ref is optional; here it explicitly marks these as Port-channel1 members.
+      - connection-id: "core-sw-01__office-sw-01__lag1"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/23"
+            lag-ref: "Port-channel1"
+          - device-id: "office-sw-01"
+            interface-id: "GigabitEthernet0/23"
+            lag-ref: "Port-channel1"
+
+      - connection-id: "core-sw-01__office-sw-01__lag2"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/24"
+            lag-ref: "Port-channel1"
+          - device-id: "office-sw-01"
+            interface-id: "GigabitEthernet0/24"
+            lag-ref: "Port-channel1"
+
       - connection-id: "office-sw-01__pc-01"
         endpoint:
           - device-id: "office-sw-01"
             interface-id: "GigabitEthernet0/2"
           - device-id: "pc-01"
             interface-id: "eth0"
+
+  layer2-layer:
+    vlan:
+      - vlan-id: 10
+        name: "office"
+      - vlan-id: 20
+        name: "dmz"
+      - vlan-id: 99
+        name: "management"
+
+    # Redundancy: LACP link aggregation between the core and office switches
+    link-aggregation:
+      - device-id: "core-sw-01"
+        lag-id: "Port-channel1"
+        mode: lacp-active
+        lacp-rate: fast
+        min-links: 1
+        member-interface:
+          - interface-id: "GigabitEthernet1/0/23"
+          - interface-id: "GigabitEthernet1/0/24"
+        mlag:
+          enabled: false
+      - device-id: "office-sw-01"
+        lag-id: "Port-channel1"
+        mode: lacp-active
+        lacp-rate: fast
+        min-links: 1
+        member-interface:
+          - interface-id: "GigabitEthernet0/23"
+          - interface-id: "GigabitEthernet0/24"
+        mlag:
+          enabled: false
 
   layer3-layer:
     ip-subnet:
@@ -139,3 +210,96 @@ network-model:
       - subnet-id: "office-segment"
         prefix: "10.1.3.0/24"
         description: "Office LAN"
+
+    # Dual-stack (IPv4 + IPv6) addressing on the ISP-facing interface
+    layer3-interface-config:
+      - device-id: "router-01"
+        interface-id: "GigabitEthernet0/0"
+        addresses:
+          - ip-address: "203.0.113.1"
+            prefix-length: 30
+          - ip-address: "2001:db8:cafe::1"
+            prefix-length: 64
+        routing:
+          ospf-area: "0.0.0.0"
+
+    # Redundancy: VRRP virtual gateway for the office segment
+    first-hop-redundancy:
+      - device-id: "core-sw-01"
+        interface-id: "GigabitEthernet1/0/2"
+        group-id: 10
+        protocol: vrrp
+        virtual-ip-address: "10.1.3.1"
+        priority: 110
+        preempt: true
+
+    # Reusable routing policies referenced by BGP peers
+    route-policy:
+      - name: "ISP-IN"
+        description: "Prefer inbound routes learned from the ISP"
+        statement:
+          - sequence: 10
+            action: permit
+            match-prefix: "0.0.0.0/0"
+            set-local-preference: 200
+      - name: "ISP-OUT"
+        description: "Advertise only our aggregate prefix to the ISP"
+        statement:
+          - sequence: 10
+            action: permit
+            match-prefix: "10.1.0.0/16"
+
+    # Dynamic routing: eBGP to the ISP on the edge router, OSPF in the core
+    routing-config:
+      - device-id: "router-01"
+        router-id: "10.0.0.1"
+        bgp:
+          local-asn: 65000
+          neighbor:
+            - neighbor-address: "203.0.113.2"
+              peer-asn: 64500
+              description: "ISP uplink"
+              address-family:
+                - ipv4-unicast
+                - ipv6-unicast
+              import-policy: "ISP-IN"
+              export-policy: "ISP-OUT"
+        redistribution:
+          - source-protocol: connected
+            destination-protocol: bgp
+      - device-id: "fw-01"
+        router-id: "10.0.0.2"
+        ospf:
+          process-id: "1"
+          area:
+            - area-id: "0.0.0.0"
+              area-type: standard
+      - device-id: "core-sw-01"
+        router-id: "10.0.0.3"
+        ospf:
+          process-id: "1"
+          area:
+            - area-id: "0.0.0.0"
+              area-type: standard
+
+  # Management plane: mgmt VLAN, per-device mgmt IP, and out-of-band access
+  management:
+    management-vlan: 99
+    device-management:
+      - device-id: "core-sw-01"
+        management-ip-address: "192.168.99.3"
+        management-prefix-length: 24
+        management-gateway: "192.168.99.1"
+        management-loopback: "10.0.0.3/32"
+        in-band-interface-id: "GigabitEthernet1/0/1"
+        out-of-band:
+          enabled: true
+          interface-id: "Management0"
+          ip-address: "192.168.100.3"
+          prefix-length: 24
+      - device-id: "fw-01"
+        management-ip-address: "192.168.99.2"
+        management-prefix-length: 24
+        management-gateway: "192.168.99.1"
+        out-of-band:
+          enabled: false

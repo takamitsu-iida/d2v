@@ -122,7 +122,7 @@ def run_d2v_job(
     # ── トポロジ解析 ─────────────────────────────────────────────
     model = parser.load_model(params.input_path)
     topology_text = parser.build_text(
-        model.devices, model.connections, model.subnets, model.device_map
+        model.devices, model.connections, model.subnets, model.device_map, model.lags
     )
     emit(progress, ProgressEvent(
         stage="topology", message="トポロジ解析完了",

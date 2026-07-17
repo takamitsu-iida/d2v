@@ -211,8 +211,12 @@ def _detail_text(
     zone_ids = {d.get("device-id", "") for d in devices}
     bp = _aggregate_boundary_stubs(model, zone_ids, boundary)
 
+    # ゾーン内接続は LAG メンバーを 1 本の論理リンクに集約する
+    lag_lookup = parser.build_lag_lookup(model.lags)
+    intra_lines, intra_count = parser.connection_section(intra, model.device_map, lag_lookup)
+
     node_total = len(devices) + len(bp.individual_ext) + len(bp.aggregated_zones_ordered)
-    conn_total = len(intra) + len(bp.indiv_boundary) + len(bp.agg_boundary)
+    conn_total = intra_count + len(bp.indiv_boundary) + len(bp.agg_boundary)
 
     lines: list[str] = []
     lines.append(f"# ゾーン詳細図: {zone}\n")
@@ -249,10 +253,7 @@ def _detail_text(
 
     # 接続一覧（ゾーン内接続 + 境界接続）
     lines.append(f"\n## 物理接続一覧（{conn_total} 本）\n")
-    for conn in intra:
-        line = parser.connection_line(conn, model.device_map)
-        if line is not None:
-            lines.append(line)
+    lines.extend(intra_lines)
     # 個別の境界接続
     for conn in bp.indiv_boundary:
         zpair = _endpoint_zones(model, conn)
@@ -503,12 +504,11 @@ def _focus_text(
             dl[0] = f"{dl[0]}  «{marker}»"
         lines.extend(dl)
 
-    # 接続一覧
-    lines.append(f"\n## 物理接続一覧（{len(intra)} 本）\n")
-    for conn in intra:
-        line = parser.connection_line(conn, model.device_map)
-        if line is not None:
-            lines.append(line)
+    # 接続一覧（LAG メンバーは 1 本の論理リンクに集約する）
+    lag_lookup = parser.build_lag_lookup(model.lags)
+    intra_lines, intra_count = parser.connection_section(intra, model.device_map, lag_lookup)
+    lines.append(f"\n## 物理接続一覧（{intra_count} 本）\n")
+    lines.extend(intra_lines)
 
     # 間接接続一覧（直接リンクは無いが、省略ノードを介して繋がる注目ノード同士）
     if indirect:
