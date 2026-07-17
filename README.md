@@ -51,29 +51,19 @@ Graphviz のインストール（Ubuntu/Debian）：
 sudo apt install graphviz
 ```
 
-絵文字アイコン（🌐 🔀 🔌 🧱 💻）を図に表示するには、絵文字フォントも必要です。
-未インストールだと `01F310` のようなコードポイントの箱で表示されます。
+ノードのアイコンは d2v に**組み込みのデバイスアイコン画像**として同梱されており、絵文字フォントのインストールは不要です。図では、ノードのタイプ（`device-type`）ごとに以下のアイコンが自動で割り当てられます。
 
-図では、ノードのタイプ（`device-type`）ごとに以下の絵文字アイコンが割り当てられます。
+| ノードタイプ | `device-type` | アイコン |
+|--------------|---------------|----------|
+| ルータ | `router` | 双方向矢印付きの筐体（青） |
+| スイッチ（L2/L3） | `switch` | ポート付きの筐体（緑） |
+| ファイアウォール | `firewall` | レンガ壁（赤） |
+| サーバ | `server` | ラック筐体（グレー） |
+| PC端末 / ホスト | `host` | モニタ（紫） |
+| ロードバランサ | `load-balancer` | 分散ツリー（橙） |
+| 不明 | 上記以外 | 汎用ボックス（淡グレー） |
 
-| 絵文字 | ノードタイプ | 説明 |
-|:------:|--------------|------|
-| 🌐 | ルータ | ルータ（`router`） |
-| 🔀 | L3スイッチ | レイヤ3スイッチ（`switch` で L3 相当） |
-| 🔌 | L2スイッチ / アクセススイッチ | レイヤ2・アクセススイッチ |
-| 🧱 | ファイアウォール | ファイアウォール（`firewall`） |
-| 💻 | サーバ / PC端末 | サーバ・PC などの端末（`server` / `pc`） |
-
-```bash
-# システム全体にインストールする場合
-sudo apt install fonts-noto-color-emoji
-
-# sudo が使えない場合はユーザー領域に配置
-mkdir -p ~/.local/share/fonts
-curl -fsSL -o ~/.local/share/fonts/NotoColorEmoji.ttf \
-  https://github.com/googlefonts/noto-emoji/raw/main/fonts/NotoColorEmoji.ttf
-fc-cache -f
-```
+アイコンは PNG 出力ではラスタ画像として、SVG 出力ではベクター画像としてノードに埋め込まれます（SVG は外部ファイル参照を持たない自己完結形式）。アイコン画像は `src/d2v/assets/icons/` に配置され、`d2v.icons.write_assets()` で再生成できます。
 
 ## セットアップ
 

@@ -188,8 +188,9 @@ def test_build_diff_dot_colors_and_structure():
     assert "subgraph cluster_z" in dot
     # 凡例
     assert "cluster_legend" in dot
-    # アイコン
-    assert "🌐" in dot and "🔀" in dot
+    # ノードアイコン（絵文字ではなくデバイス種別アイコン画像を参照）
+    assert "router.png" in dot and "switch.png" in dot
+    assert "🌐" not in dot and "🔀" not in dot
 
 
 def test_build_diff_dot_empty_diff_has_only_unchanged():
@@ -351,8 +352,8 @@ def test_build_impact_dot_highlights():
     report = impact(m, removed_devices=["n2"])
     dot = build_impact_dot(m, report)
     assert dot.startswith("digraph impact {")
-    # 除去ノード n2 は ✖ マーク付き
-    assert "✖" in dot
+    # 除去ノード n2 は (削除) マーク付き
+    assert "(削除)" in dot
     # 到達不能 n1 は赤系、到達可能 n3/n4 は緑系
     assert "#FCE8E6" in dot  # unreachable fill
     assert "#E6F4EA" in dot  # reachable fill

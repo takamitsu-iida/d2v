@@ -11,6 +11,7 @@ import ipaddress
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
 
+from d2v import icons
 from d2v import parser
 from d2v.config import settings
 from d2v.parser import TopologyModel
@@ -619,15 +620,7 @@ def focus_plan(
 #   エディタのライブプレビュー用。即時・無料・冪等（同一入力→同一出力）。
 # ---------------------------------------------------------------------------
 
-# device-type → 絵文字アイコン（README・diff の配色規約に合わせる）
-_FOCUS_ICON: dict[str, str] = {
-    "router": "🌐",
-    "switch": "🔀",
-    "firewall": "🧱",
-    "server": "💻",
-    "host": "💻",
-    "load-balancer": "⚖️",
-}
+# device-type → ノードアイコンは d2v.icons に一元化（絵文字は廃止）
 
 # 役割 → (fillcolor, color, penwidth)
 _FOCUS_STYLE_FOCUS = ("#D2E3FC", "#1A73E8", "2.4")   # ★注目ノード（強調）
@@ -681,7 +674,6 @@ def build_focus_dot(
 
     def _emit_node(did: str, indent: str) -> None:
         dev = model.device_map.get(did, {"device-id": did})
-        icon = _FOCUS_ICON.get(dev.get("device-type"), "📦")
         name = dev.get("device-name", "")
         hop = data.dist.get(did, 0)
         is_focus = did in focus_set
@@ -698,15 +690,15 @@ def build_focus_dot(
             marker = f"{hop} ホップ"
             style = "filled,rounded"
 
-        label_parts = [f"{icon} {did}"]
+        label_lines = [did]
         if name and name != did:
-            label_parts.append(name)
-        label_parts.append(marker)
-        label = "\\n".join(label_parts)
+            label_lines.append(name)
+        label_lines.append(marker)
+        label = icons.html_label(dev.get("device-type"), label_lines)
         tooltip = did + (f" / {name}" if name and name != did else "") + \
             f" ・ {marker}"
         lines.append(
-            f"{indent}{_dq(did)} [label={_dq(label)}, "
+            f"{indent}{_dq(did)} [label={label}, "
             f'fillcolor="{fill}", color="{color}", penwidth={pw}, '
             f'style="{style}", id={_dq("device:" + did)}, '
             f"tooltip={_dq(tooltip)}];"

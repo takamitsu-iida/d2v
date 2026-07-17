@@ -233,7 +233,7 @@ network-model
 
 | フィールド | 定義場所 | 用途 |
 |-----------|---------|------|
-| `device-type` | `device-identification` grouping | 絵文字アイコンマッピング（router / switch / firewall 等） |
+| `device-type` | `device-identification` grouping | デバイスアイコンマッピング（router / switch / firewall 等、`d2v.icons`） |
 | `zone` | `physical-layer.device` | subgraph cluster によるゾーン分け |
 | `asn` | `physical-layer.device` | BGP トポロジ図でのノードラベル表示 |
 | `loopback` | `physical-layer.device` | 管理 IP としてノードラベルに表示 |
@@ -1438,7 +1438,7 @@ class TopologyDiff(BaseModel):
 
 **実装（2026-07-16）**
 - `src/d2v/diff.py` に差分図生成を追加:
-  - `build_diff_dot(before, after, diff)`: 和集合グラフの Graphviz DOT を決定論的に生成。ノードは追加=緑(#137333)・削除=赤(#C5221F・破線)・変更=橙(#E37400)・無変更=淡灰(#9AA0A6)で塗り分け、エッジも同様に色分け（削除は破線・太線）。device-type→絵文字アイコン（🌐🔀🧱💻）、zone ごとに `subgraph cluster` 化、変更ノードはラベルに「(変更: field...)」＋tooltip に before→after を明示。図中に**凡例 cluster**（追加/削除/変更/変更なし）を描画。
+  - `build_diff_dot(before, after, diff)`: 和集合グラフの Graphviz DOT を決定論的に生成。ノードは追加=緑(#137333)・削除=赤(#C5221F・破線)・変更=橙(#E37400)・無変更=淡灰(#9AA0A6)で塗り分け、エッジも同様に色分け（削除は破線・太線）。device-type→デバイスアイコン（`d2v.icons` の SVG/PNG を HTML ラベルで埋め込み）、zone ごとに `subgraph cluster` 化、変更ノードはラベルに「(変更: field...)」＋tooltip に before→after を明示。図中に**凡例 cluster**（追加/削除/変更/変更なし）を描画。
   - `render_diff_diagram(...)`: `build_diff_dot` → `renderer.render` で PNG/SVG を出力（`output/diff/` に画像と `.dot` ソースを保存）。renderer は改変せず既存 `render()` を再利用（矢じり除去・cluster 淡色化・縦横比フィットをそのまま活用）。
 - `tests/test_diff.py` に Phase 1 テスト 3 件（DOT の色/構造/アイコン/凡例/変更ラベル、無変更ノードの色、実レンダリングでの画像＋DOT 保存。Graphviz 未導入時は skip）。
 - 検証: small サンプルを改変（office-sw-01 の zone 変更・new-srv-01 追加＋接続・pc-01 削除）した差分図を生成し、追加=緑/削除=赤点線/変更=橙「(変更: zone)」・zone クラスタ・凡例が正しく描画されることを目視確認。`python -m pytest tests/ -q` → **136 passed**（既存 133 + Phase 1 3）。
@@ -1574,7 +1574,7 @@ Webview パネル
 |------|------|------|
 | レンダリング経路 | **LLM 非依存の決定論 DOT ビルダーを新規追加**（`build_focus_dot`） | 既存の focus 経路は LLM 生成のため遅く・課金あり。編集追従には即時・無料・冪等が必須 |
 | 部分グラフ抽出 | 既存 `partitioner.focus_plan` / `hop_distances` を再利用 | 多点 BFS・境界省略ロジックが実装済み。二重実装しない |
-| DOT の書き味 | `diff.build_diff_dot` / `build_impact_dot` と同じ内製方式を踏襲 | 決定論・追加依存なし。device-type 絵文字・zone クラスタも既存規約に合わせる |
+| DOT の書き味 | `diff.build_diff_dot` / `build_impact_dot` と同じ内製方式を踏襲 | 決定論・追加依存なし。device-type アイコン・zone クラスタも既存規約に合わせる |
 | API 形態 | **同期**エンドポイント（ジョブ/SSE を使わない） | プレビューは短時間で完結。既存の非同期ジョブ基盤は重すぎる |
 | カーソル→device 解決 | サーバ側で YAML を解析し行→device-id をマップ | `yaml.compose` の行マーク（`start_mark`/`end_mark`）で解決。追加依存なし・拡張側は薄く保つ |
 | 双方向ジャンプ | DOT ノードに `id`/`tooltip` を埋め、SVG クリックで行番号へ | SVG は行番号メタを持てる。編集⇔図の往復を高速化 |

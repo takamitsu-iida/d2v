@@ -8,6 +8,7 @@ from pathlib import Path
 
 import graphviz
 
+from d2v import icons
 from d2v.config import settings
 from d2v.errors import GraphvizNotFoundError
 
@@ -39,6 +40,22 @@ _CLUSTER_FILLED_RE = re.compile(r'style\s*=\s*"?filled"?\s*;', re.IGNORECASE)
 
 # グラフ宣言の開き波括弧（例: `digraph G {`）にマッチする正規表現
 _GRAPH_OPEN_RE = re.compile(r"(strict\s+)?(di)?graph\b[^{]*\{", re.IGNORECASE)
+
+
+def inject_imagepath(dot_code: str) -> str:
+    """ノードアイコン（`<IMG SRC="TYPE.png">`）の探索先を DOT に注入する。
+
+    グラフ宣言直後に `imagepath="<アセットディレクトリ>";` を挿入し、DOT 内の
+    アイコン参照をファイル名だけで解決できるようにする。既に `imagepath` が
+    指定済みの場合は二重挿入を避けて元のコードを返す。
+    """
+    if re.search(r"\bimagepath\s*=", dot_code, re.IGNORECASE):
+        return dot_code
+    m = _GRAPH_OPEN_RE.search(dot_code)
+    if not m:
+        return dot_code
+    at = m.end()
+    return dot_code[:at] + "\n" + icons.imagepath_line() + dot_code[at:]
 
 
 def remove_edge_arrows(dot_code: str) -> str:
@@ -218,6 +235,9 @@ def render(
     dot_code = neutralize_cluster_fill(dot_code)
     dot_code = remove_edge_arrows(dot_code)
     dot_code = apply_zone_opacity(dot_code, zone_opacity)
+    # LLM 生成 DOT の d2vtype 属性付きノードへアイコンを注入し、探索先を設定する
+    dot_code = icons.inject_icons_into_dot(dot_code)
+    dot_code = inject_imagepath(dot_code)
     # 横長すぎる図は縦横比を目標（既定 4:3）に近づける
     dot_code = fit_aspect_ratio(dot_code, settings.diagram_aspect_ratio)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -243,4 +263,16 @@ def render(
         # DOT の構文エラー等は改善ループで回復しうるため例外を送出する
         raise RenderError(str(e), dot_path) from e
 
-    return Path(rendered)
+    rendered_path = Path(rendered)
+    # SVG 出力ではアイコンをベクターでインライン埋め込みし、外部ファイル参照を
+    # 排して自己完結（ブラウザ表示・移動に強い）させる。
+    if fmt == "svg":
+        try:
+            svg_text = rendered_path.read_text(encoding="utf-8")
+            rendered_path.write_text(
+                icons.inline_svg_icons(svg_text), encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    return rendered_path

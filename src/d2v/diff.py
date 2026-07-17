@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from rich.console import Group, RenderableType
 from rich.text import Text
 
+from d2v import icons
 from d2v.parser import TopologyModel
 
 _YamlDict = dict[str, Any]
@@ -329,15 +330,7 @@ def render_diff(diff: TopologyDiff) -> RenderableType:
 # 差分図（Graphviz DOT）: 和集合グラフを色分け描画
 # ---------------------------------------------------------------------------
 
-# device-type → 絵文字アイコン（d2v の作図規約に準拠）
-_ICON: dict[str, str] = {
-    "router": "🌐",
-    "switch": "🔀",
-    "firewall": "🧱",
-    "server": "💻",
-    "host": "💻",
-    "load-balancer": "⚖️",
-}
+# device-type → ノードアイコンは d2v.icons に一元化（絵文字は廃止）
 
 # 差分ステータス → (fillcolor, color, node style)
 _NODE_STATUS_STYLE: dict[str, tuple[str, str, str]] = {
@@ -452,17 +445,17 @@ def build_diff_dot(
         status = _status(did)
         fill, color, style = _NODE_STATUS_STYLE[status]
         dev = _dev(did)
-        icon = _ICON.get(dev.get("device-type"), "📦")
-        label = f"{icon} {did}"
+        label_lines = [did]
         tooltip = {"added": "追加", "removed": "削除", "unchanged": "変更なし"}.get(status, "変更")
         if did in changed:
             fields = ", ".join(c.field for c in changed[did].changes)
-            label += f"\\n(変更: {fields})"
+            label_lines.append(f"(変更: {fields})")
             tooltip = "; ".join(
                 f"{c.field}: {c.before}→{c.after}" for c in changed[did].changes
             )
+        label = icons.html_label(dev.get("device-type"), label_lines)
         lines.append(
-            f'{indent}{_q(did)} [label={_q(label)}, fillcolor="{fill}", '
+            f'{indent}{_q(did)} [label={label}, fillcolor="{fill}", '
             f'color="{color}", style="{style}", tooltip={_q(tooltip)}];'
         )
 
@@ -664,10 +657,12 @@ def build_impact_dot(model: TopologyModel, report: ImpactReport) -> str:
     def _emit_node(did: str, indent: str) -> None:
         fill, color, style, fontcolor = _IMPACT_NODE_STYLE[_status(did)]
         dev = model.device_map.get(did, {})
-        icon = _ICON.get(dev.get("device-type"), "📦")
-        mark = "✖ " if did in removed else ""
+        label_lines = [did]
+        if did in removed:
+            label_lines.append("(削除)")
+        label = icons.html_label(dev.get("device-type"), label_lines)
         lines.append(
-            f'{indent}{_q(did)} [label={_q(mark + icon + " " + did)}, '
+            f'{indent}{_q(did)} [label={label}, '
             f'fillcolor="{fill}", color="{color}", style="{style}", fontcolor="{fontcolor}"];'
         )
 

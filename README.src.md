@@ -54,6 +54,7 @@ src/d2v/
 ├── generator.py            ← LLM による DOT コード生成
 ├── evaluator.py            ← ルールベース + LLM による品質評価
 ├── renderer.py             ← Graphviz による画像レンダリング
+├── icons.py                ← デバイス種別アイコン（SVG/PNG 生成・HTML ラベル・SVG インライン埋め込み）
 ├── visualizer.py           ← スコア推移グラフの描画
 ├── progress.py             ← 進捗イベント定義（CLI / GUI 共通）
 ├── llm/                    ← LLM プロバイダー抽象化

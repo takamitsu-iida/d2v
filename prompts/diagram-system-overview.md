@@ -28,8 +28,8 @@
 
 # デザイン
 - 各ゾーンノードは `shape=box, style="filled,rounded"` とし、`fillcolor` に淡いパステル色、`color` に濃いめの枠線色を指定してください。
-- ゾーンの役割が伝わる絵文字を label 先頭に付けても構いません（🌐 境界 / 🧱 セキュリティ / 🔀 コア / 🗂 ファブリック / 💻 サーバ など）。
 - この図では `subgraph cluster` は使わず、ゾーンを表す単一ノードのみで構成してください。
+- label に絵文字は使わず、ゾーン名と規模（台数・内訳）をテキストで記載してください。
 
 # 出力フォーマット
 出力は Markdown のコードブロック（```dot ... ```）で囲んだ Graphviz DOT 言語のみとし、前後の解説は不要です。
@@ -45,8 +45,8 @@ digraph G {
     edge [fontname="Helvetica,Arial,sans-serif", fontsize=9, color="#4A5568", penwidth=1.5];
 
     // 1 ゾーン = 1 ノード（fillcolor は淡色、color は濃い枠線）
-    "wan-edge"  [label="🌐 wan-edge\n2 routers",   fillcolor="#E6F4EA", color="#137333"];
-    "security"  [label="🧱 security\n2 firewalls", fillcolor="#FCE8E6", color="#C5221F"];
+    "wan-edge"  [label="wan-edge\n2 routers",   fillcolor="#E6F4EA", color="#137333"];
+    "security"  [label="security\n2 firewalls", fillcolor="#FCE8E6", color="#C5221F"];
     // ... 入力のゾーン数ぶん
 
     // ゾーン間接続（本数を label に）
