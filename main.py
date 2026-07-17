@@ -42,6 +42,13 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "diff":
         run_diff(sys.argv[2:])
         return
+    # ── [削除可能] 決定論的ジェネレータ（LLM 非依存）: src/d2v/detgen.py と
+    #    この 4 行を消せば丸ごと撤去できる ─────────────────────────
+    if len(sys.argv) > 1 and sys.argv[1] == "dot":
+        from d2v.detgen import run_cli
+        run_cli(sys.argv[2:])
+        return
+    # ──────────────────────────────────────────────────────────────
     run_d2v()
 
 def run_d2v() -> None:

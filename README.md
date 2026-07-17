@@ -503,6 +503,49 @@ LLM は以下の観点で 10 点満点で評価します。ルールベースチ
 
 <br><br>
 
+## dot — LLM 非依存の決定論的生成（オフライン・フォールバック）
+
+LLM を一切使わず、`iida-network-model` YAML から Graphviz DOT を**決定論的に**組み立てて
+構成図（PNG / SVG）を出力するサブコマンドです。**API キー不要・オフライン可**で、同じ入力
+からは常に同じ図が得られます。
+
+通常の d2v フロー（生成 → 評価 → 改善ループ）とは独立しており、**評価も改善ループも行いません**。
+そのぶんレイアウト品質は LLM 経路に劣りますが、次のような場面のフォールバックとして機能します。
+
+- LLM の API キーが用意できない／ネットワークに繋がらない環境
+- コストや実行時間をかけずに、まず 1 枚を確実に描きたいとき
+- CI などで、入力が同じなら常に同一出力になる決定論的な生成が欲しいとき
+
+```bash
+# 小規模トポロジを PNG で生成（LLM 不使用）
+python main.py dot -i examples/sample_topology_small.yaml
+
+# SVG で出力
+python main.py dot -i examples/sample_topology_medium.yaml -f svg
+
+# 出力先やファイル名を指定し、生成した DOT も標準出力に表示
+python main.py dot -i examples/sample_topology_large.yaml -o output/det --stem large --print-dot
+```
+
+| オプション | 説明 |
+|-----------|------|
+| `--input, -i` | 入力トポロジ YAML（必須） |
+| `--output-dir, -o` | 出力ディレクトリ（デフォルト: `output`） |
+| `--format, -f` | `png` / `svg`（デフォルト: `png`） |
+| `--stem` | 出力ファイル名（拡張子なし。デフォルトは入力ファイル名） |
+| `--zone-opacity` | ゾーン背景色の不透明度 0.0〜1.0（デフォルト: 0.4） |
+| `--print-dot` | 生成した DOT コードを標準出力にも表示する |
+
+デバイス種別（`device-type`）ごとのアイコン・配色、ゾーン（`zone`）単位の `subgraph cluster`、
+ポート名（taillabel / headlabel）とセグメント（label）付きの無向エッジは、通常の d2v 出力と
+同様に付与されます。
+
+> 実装は単一モジュール [`src/d2v/detgen.py`](src/d2v/detgen.py) に完結しています。不要になった
+> 場合は、このファイルと `main.py` の `dot` サブコマンド振り分けブロック（数行）を削除するだけで、
+> 他機能に影響を与えずに撤去できます。
+
+<br><br>
+
 ## v2d — 画像からトポロジ YAML を生成（vision-to-diagram）
 
 d2v の逆変換です。ネットワーク構成図の**画像（PNG / JPEG）**をマルチモーダル LLM で解析し、
