@@ -1721,3 +1721,86 @@ Webview パネル
 - [x] `POST /api/focus/preview`（同期）と「行→device-id」解決を実装
 - [x] 最小 VS Code 拡張でカーソル追従プレビューを成立させる
 - [x] `main.py diff` サブコマンドで差分図＋構造 diff を出力
+
+---
+
+# 2段階レイアウト（ゾーン配置の決定論化）
+
+## 背景・課題
+現状、ゾーン（`subgraph cluster`）の位置は専用ロジックを持たず、**実デバイスノード
+＋実リンクを Graphviz `dot` が階層配置した副産物**として決まる。LLM パスでは毎回
+DOT 構造や rank ヒントが変わるため、ゾーンの相対位置が実行ごとに揺れる。
+
+## 目的
+ゾーンの相対位置を**決定論的に固定**して実行ごとの揺れをなくす。ゾーン内のノード
+配置・見た目（LLM の美しさ）は維持する。
+
+## 方式：2段階レイアウト
+- **Stage 1（ゾーングラフ配置）**: ゾーンをノード、ゾーン間接続をエッジとする小さな
+  グラフを `dot` で配置し、各ゾーンの「段（tier）・段内左右順」を確定する（小規模ゆえ
+  決定論的で安定）。
+- **Stage 2（本図を制約付きで描画）**: 本図に各ゾーンの**不可視アンカーノード**を仕込み、
+  `{rank=same}`＋不可視エッジで段・順序を固定。`dot` のクラスタ枠・アイコン・ラベルは
+  そのまま活かす。`twopi` はクラスタ枠を描画しないため不採用（検証済み）。
+
+## 技術的決定事項（2段階レイアウト）
+
+| 項目 | 決定 | 理由 |
+|------|------|------|
+| エンジン | `dot`（据え置き） | クラスタ枠・アイコン・階層配置を維持。`twopi`/`neato` は枠を壊す |
+| ゾーン位置の表現 | 段(tier)＋段内順の離散値 | `pos!` 固定より `dot` と相性が良く堅牢 |
+| 位置の強制手段 | 不可視アンカー＋`rank=same`＋不可視順序エッジ | LLM 出力の中身を壊さず制約だけ重畳できる |
+| ゾーン↔クラスタ対応 | cluster に `d2vzone="<zone>"` 属性を付与 | `d2vtype` と同思想。後処理で確実に対応付け |
+| Stage1 の座標取得 | `graphviz.Source(dot).pipe(format="plain")` | 既存 `renderer._graph_size` と同じ plain 解析を流用 |
+| 追加依存 | なし（既存 `graphviz` を再利用） | 軽量・決定論を維持 |
+| 既定動作 | OFF（無指定は従来どおり） | 後方互換。`diagram.layout: zoned` で opt-in |
+
+## 新規モジュール `src/d2v/zonelayout.py`
+- `compute_zone_placement(model) -> ZonePlacement`（Stage1）
+  - 別ゾーン間接続のみ集約 → ゾーングラフ DOT → plain 解析 → `tiers` / `tier_of` / `order_in_tier`。
+- `zone_constraint_dot(placement, zone_anchor) -> list[str]`（Stage2）
+  - 不可視アンカー、同段 `{rank=same}`、段内順・段間順の不可視エッジ行を生成。
+
+## 適用パス（段階導入）
+- **フェーズ1（先行・決定論）**: `src/d2v/detgen.py` の `generate_dot` に統合。
+  `python main.py dot` で完全決定論の2段階レイアウトを出力・目視確認。
+- **フェーズ2（本命・LLM）**: プロンプトに `d2vzone` 付与を追加し、`pipeline`/`renderer`
+  のレンダリング前に `inject_zone_constraints(dot)` で制約を後処理注入。LLM の美しさ＋
+  決定論的ゾーン位置を両立。`diagram.layout: zoned` で切替。
+
+## 変更点（ファイル別）
+| ファイル | 変更 |
+|---|---|
+| `src/d2v/zonelayout.py`（新規） | Stage1/Stage2 コア |
+| `src/d2v/detgen.py` | フェーズ1: アンカー＋制約注入 |
+| `prompts/diagram-system.md` | フェーズ2: cluster への `d2vzone` 付与ルール |
+| `src/d2v/renderer.py` | フェーズ2: `inject_zone_constraints` |
+| `src/d2v/pipeline.py` / `web/service.py` | 後処理フック呼び出し |
+| `src/d2v/parser.py` | `diagram.layout: zoned` の解釈 |
+| `src/d2v/config.py` | 既定 ON/OFF トグル |
+
+## エッジケース・留意点
+- zone 未設定ノードはゾーングラフから除外し、本図では従来どおり cluster 外に配置。
+- ゾーン 1 個 / ゾーン間接続ゼロは Stage1 をスキップし従来動作へフォールバック。
+- 同段の左右順は `dot` で不安定になりがち → 不可視チェイン＋`ordering=out` 等で安定化を検証。
+- 追加する不可視エッジは評価器のエッジ本数カウント対象外（`style=invis` 除外）にする。
+
+## テスト計画
+- `tests/test_zonelayout.py`（新規）: ゾーングラフ構築 / plain→tier・order 変換の
+  決定論性 / 制約 DOT 行の生成内容。
+- `detgen` 系: cluster 内アンカー挿入とレンダリング成功。
+- 既存 185 テストの非回帰。
+
+## マイルストーン（2段階レイアウト）
+
+### Z0: 計画合意 — [x] PLAN.md へ追記（本セクション）
+### Z1: コア — [x] `zonelayout.py`（Stage1+Stage2）＋単体テスト（`tests/test_zonelayout.py` 11 件）
+### Z2: 決定論統合 — [ ] `detgen` に統合し `main.py dot` で実出力・目視確認
+### Z3: LLM 適用 — [ ] `d2vzone`＋後処理注入、`diagram.layout: zoned` で切替
+### Z4: 評価・既定化判断 — [ ] 美しさと安定性のトレードオフをサンプルで評価
+
+## 直近の次アクション（2段階レイアウト）
+- [x] `zonelayout.compute_zone_placement`（ゾーングラフ構築→plain 解析→tier/order）を実装
+- [x] `zonelayout.zone_constraint_dot`（アンカー＋rank=same＋不可視順序エッジ）を実装
+- [x] `tests/test_zonelayout.py` で決定論性・生成内容を検証（11 件パス）
+- [ ] フェーズ1として `detgen.generate_dot` に組み込み、`main.py dot` で目視確認

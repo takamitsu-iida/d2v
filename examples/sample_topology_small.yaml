@@ -1,3 +1,12 @@
+# 図レイアウト指定（任意）。network-model と同階層のトップレベルブロック。
+#   layout: layered … 従来の階層配置（dot エンジン、上→下）。省略時と同じ
+#   layout: star    … 中心ゾーンを中央に置き、他ゾーンを放射状に配置（fdp エンジン）
+#   tiers           … layered 時の水平階層数（段数）。例: 4 なら上から下へ 4 段に配置
+#   center-zone     … star 時に中央へ置くゾーン名（各デバイスの zone の値）
+# diagram:
+#  layout: layered
+#  tiers: 3
+
 network-model:
   physical-layer:
     device:

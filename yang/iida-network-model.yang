@@ -1,12 +1,33 @@
+// =============================================================================
+// このファイルは YANG (RFC 7950 / YANG 1.1) で書かれたデータモデル定義です。
+// YANG はネットワーク機器の「設定・状態データの構造」を記述するための言語で、
+// XML(NETCONF) や JSON(RESTCONF) のスキーマとして使われます。
+//
+// ▼ YANG を読むための最低限の用語（このファイルによく出てきます）
+//   module     : モデル全体のまとまり（1ファイル＝1モジュール）。
+//   container  : 関連する項目をまとめる「箱」。JSON のオブジェクトに相当。
+//   list       : 同じ構造の要素を複数持つ「表」。JSON の配列に相当。
+//   key        : list の各行を一意に識別するキー項目（表の主キー）。
+//   leaf       : 単一の値を持つ末端の項目（1つのフィールド）。
+//   leaf-list  : 単一値を複数持つ項目（値の配列）。
+//   type       : leaf が取れる値の種類（string / uint16 / enumeration など）。
+//   leafref    : 他の場所の値を「参照」する型。path で参照先を指定する（外部キー）。
+//   grouping   : 再利用可能な項目の束。uses で他の場所へ展開（貼り付け）する。
+//   uses       : grouping を呼び出して、その中身をその場に展開する。
+//   when       : 条件付きで項目を有効化する（XPath 条件式）。
+//   presence   : container の「存在自体」に意味を持たせる（有効/無効の切替）。
+//   mandatory  : true なら必須項目。
+// =============================================================================
 module iida-network-model {
-  yang-version 1.1;
-  namespace "urn:iida:params:xml:ns:yang:iida-network-model";
-  prefix "nnm";
+  yang-version 1.1;                                              // YANG のバージョン（1.1 を使用）
+  namespace "urn:iida:params:xml:ns:yang:iida-network-model";   // 名前空間（このモデルの一意なURI）
+  prefix "nnm";                                                 // このモジュールの短縮名（別モジュールから参照する際に使う）
 
-  import ietf-inet-types {
+  // import: 他モジュールで定義済みの型を借りて使う宣言。
+  import ietf-inet-types {   // IP アドレス/プレフィックス等の標準型（inet:ip-address 等）
     prefix "inet";
   }
-  import ietf-yang-types {
+  import ietf-yang-types {   // MAC アドレス等の標準型（yang:mac-address 等）
     prefix "yang";
   }
 
@@ -73,17 +94,23 @@ module iida-network-model {
   // ===========================================================================
   // Top-level container for the entire network configuration
   // ===========================================================================
+  // network-model: このモデル全体の最上位コンテナ。
+  // 実データはこの下に physical-layer / layer2-layer / layer3-layer / management
+  // の4つの区画（レイヤ）として整理されている。
   container network-model {
     description "Top-level container for the entire network configuration.";
 
     // ===========================================================================
     // Common Definitions and Type-Defs
+    // ---------------------------------------------------------------------------
+    // grouping = 再利用する項目のテンプレート。ここで定義し、各所で uses により展開する。
+    // device-identification: デバイスを識別する共通項目（ID・名前・種別）。
     // ===========================================================================
     grouping device-identification {
       leaf device-id {
         type string {
-          pattern '[a-zA-Z0-9_-]+';
-          length "1..64";
+          pattern '[a-zA-Z0-9_-]+';   // 使用可能文字を正規表現で制限
+          length "1..64";             // 文字数の範囲を制限
         }
         description "Unique identifier for a network device.";
       }
@@ -119,14 +146,17 @@ module iida-network-model {
 
     // ===========================================================================
     // Physical Layer (Devices and Physical Ports/Connections)
+    // ---------------------------------------------------------------------------
+    // 物理レイヤ: ネットワーク機器そのものと、機器間の物理ケーブル接続を表す。
     // ===========================================================================
     container physical-layer {
       description "Details about physical devices and their interconnections.";
 
+      // list device: ネットワーク機器の一覧。key は device-id（1機器＝1行）。
       list device {
         key "device-id";
         description "List of all physical network devices.";
-        uses device-identification;
+        uses device-identification;   // device-identification grouping の中身をここへ展開
         leaf vendor {
           type string;
           description "Vendor of the device (e.g., Cisco, Juniper).";
@@ -163,7 +193,7 @@ module iida-network-model {
         list interface {
           key "interface-id";
           description "Physical interfaces of the device.";
-          uses interface-identification;
+          uses interface-identification;   // interface-id をこの list に取り込む
           leaf description {
             type string;
             description "Description of the interface.";
@@ -196,6 +226,8 @@ module iida-network-model {
         }
       }
 
+      // list physical-connection: 機器間の物理ケーブル接続を表す。
+      // 1本の接続は必ず2つの endpoint（両端）を持つ（min/max-elements 2 で強制）。
       list physical-connection {
         key "connection-id";
         description "Direct physical cable connections between interfaces.";
@@ -205,16 +237,18 @@ module iida-network-model {
         }
         list endpoint {
           key "device-id";
-          min-elements 2;
-          max-elements 2;
+          min-elements 2;   // 端点はちょうど2つ
+          max-elements 2;   // （両端）
           description "The two endpoint devices and interfaces of this physical connection.";
           leaf device-id {
+            // leafref: 上位の device リストに実在する device-id だけを許可（外部キー）
             type leafref {
               path "../../../device/device-id";
             }
             description "Identifier of the endpoint device.";
           }
           leaf interface-id {
+            // leafref + 述語[...]: 「その endpoint のデバイスが持つ」interface-id に限定
             type leafref {
               path "../../../device[device-id=current()/../device-id]/interface/interface-id";
             }
@@ -250,10 +284,14 @@ module iida-network-model {
 
     // ===========================================================================
     // Layer 2 (VLANs and Layer 2 Configuration on Interfaces)
+    // ---------------------------------------------------------------------------
+    // L2レイヤ: VLAN の定義と、各インターフェースの L2 設定（access/trunk）、
+    // およびリンク集約（LAG/LACP）を扱う。
     // ===========================================================================
     container layer2-layer {
       description "Details about VLANs and Layer 2 configurations.";
 
+      // list vlan: ネットワーク内で定義された VLAN の一覧。
       list vlan {
         key "vlan-id";
         description "Definition of VLANs configured in the network.";
@@ -293,13 +331,14 @@ module iida-network-model {
           description "Layer 2 mode of the interface.";
         }
         leaf access-vlan {
+          // when: l2-mode が access のときだけこの項目が有効になる
           when "../l2-mode = 'access'" {
             description "Required for access mode.";
           }
           type leafref {
             path "../../vlan/vlan-id";
           }
-          mandatory true;
+          mandatory true;   // access モードでは必須
           description "VLAN ID for access ports.";
         }
         list trunk-vlans {
@@ -324,6 +363,8 @@ module iida-network-model {
         // STP settings, EtherChannel etc. can be added here
       }
 
+      // list link-aggregation: 複数の物理ポートを1本の論理リンクに束ねる LAG 定義。
+      // key は (device-id, lag-id) の2つの組み合わせ（デバイス毎の集約グループ）。
       list link-aggregation {
         key "device-id lag-id";
         description
@@ -377,7 +418,7 @@ module iida-network-model {
           description "Multi-chassis LAG (MLAG/vPC/MC-LAG) peering settings.";
           leaf enabled {
             type boolean;
-            default "false";
+            default "false";   // 未指定時の既定値は false
             description "Whether this aggregate participates in a multi-chassis LAG.";
           }
           leaf domain-id {
@@ -408,10 +449,14 @@ module iida-network-model {
 
     // ===========================================================================
     // Layer 3 (IP Addresses, Subnets, Routing)
+    // ---------------------------------------------------------------------------
+    // L3レイヤ: IP サブネット、インターフェースのIP設定、ホスト、静的/動的ルーティング、
+    // ゲートウェイ冗長(VRRP等)、ルートポリシーを扱う。
     // ===========================================================================
     container layer3-layer {
       description "Details about IP addressing and routing configurations.";
 
+      // list ip-subnet: ネットワークで使用するIPサブネット（プレフィックス）の定義。
       list ip-subnet {
         key "subnet-id";
         description "Definition of IP subnets used in the network.";
@@ -544,6 +589,8 @@ module iida-network-model {
         }
       }
 
+      // list first-hop-redundancy: ホストのデフォルトGWを冗長化する VRRP/HSRP/GLBP の設定。
+      // 複数ルータで仮想IPを共有し、障害時にマスターを切り替える。
       list first-hop-redundancy {
         key "device-id interface-id group-id";
         description
@@ -591,6 +638,7 @@ module iida-network-model {
         }
       }
 
+      // list route-policy: BGPピアや再配布から参照する、再利用可能なルートポリシー(route-map)。
       list route-policy {
         key "name";
         description
@@ -635,6 +683,7 @@ module iida-network-model {
         }
       }
 
+      // list routing-config: デバイス毎の動的ルーティング設定（BGP/OSPF）とルート再配布。
       list routing-config {
         key "device-id";
         description
@@ -653,7 +702,7 @@ module iida-network-model {
         }
 
         container bgp {
-          presence "BGP is enabled on this device.";
+          presence "BGP is enabled on this device.";   // presence: この container が存在する＝BGP有効
           description "BGP configuration for this device.";
           leaf local-asn {
             type uint32;
@@ -731,7 +780,7 @@ module iida-network-model {
         }
 
         container ospf {
-          presence "OSPF is enabled on this device.";
+          presence "OSPF is enabled on this device.";   // presence: この container が存在する＝OSPF有効
           description "OSPFv2/v3 configuration for this device.";
           leaf process-id {
             type string;
@@ -792,6 +841,9 @@ module iida-network-model {
 
     // ===========================================================================
     // Management Plane (Management interfaces, OOB, mgmt VLAN, mgmt loopback)
+    // ---------------------------------------------------------------------------
+    // 管理プレーン: 機器を運用・到達するための管理系設定。
+    // In-band/Out-of-Band 管理IF、管理VLAN、管理用ループバックなど。
     // ===========================================================================
     container management {
       description

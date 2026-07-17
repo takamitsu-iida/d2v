@@ -29,6 +29,7 @@ class TopologyModel:
     subnets: list[_YamlDict] = field(default_factory=list)
     device_map: dict[str, _YamlDict] = field(default_factory=dict)
     lags: list[_YamlDict] = field(default_factory=list)
+    diagram: _YamlDict = field(default_factory=dict)
 
     def zone_of(self, device_id: str) -> str:
         """デバイス ID からゾーン名を返す（未設定なら空文字）。"""
@@ -77,6 +78,10 @@ def load_model(path: Path) -> TopologyModel:
     layer2 = root.get("layer2-layer", {})
     lags: list[_YamlDict] = layer2.get("link-aggregation", [])
 
+    # 図レイアウト指定は network-model と同階層（トップレベル）の任意ブロック。
+    # 例: diagram: { layout: star, center-zone: core }
+    diagram: _YamlDict = raw.get("diagram", {}) or {}
+
     device_map: dict[str, _YamlDict] = {d["device-id"]: d for d in devices}
 
     return TopologyModel(
@@ -85,6 +90,7 @@ def load_model(path: Path) -> TopologyModel:
         subnets=subnets,
         device_map=device_map,
         lags=lags,
+        diagram=diagram,
     )
 
 
@@ -285,17 +291,76 @@ def connection_section(connections: list[_YamlDict], device_map: dict[str, _Yaml
     return out, len(out)
 
 
+def layout_directive(diagram: _YamlDict) -> str:
+    """図レイアウト指定（任意の diagram ブロック）を LLM 用ディレクティブへ整形する。
+
+    入力 YAML のトップレベル ``diagram`` ブロックを解釈する。対応キー:
+      - ``layout``: ``star``（中心ゾーン＋放射状）/ ``layered``（既定の階層配置）。
+      - ``center-zone``: スター型の中心に置くゾーン名（zone フィールドの値）。
+      - ``tiers`` (別名 ``layers``): layered 時の水平階層数（rank レベル数）を指定する。
+    指定が無く従来挙動でよい場合は空文字を返す。
+    """
+    if not diagram:
+        return ""
+    layout = str(diagram.get("layout", "")).strip().lower()
+
+    if layout in ("star", "radial"):
+        center = str(diagram.get("center-zone", "")).strip()
+        lines = [
+            "## 図レイアウト指定（ユーザー指定・厳守）\n",
+            "以下のゾーン配置ポリシーに従って cluster を配置してください"
+            "（詳細はシステムプロンプトの「ゾーン配置ポリシー」を参照）:",
+            "- レイアウト方式: **スター型**"
+            "（中心ゾーンを中央に置き、その他のゾーンを周囲へ放射状に配置する）",
+        ]
+        if center:
+            lines.append(f"- 中心ゾーン: `{center}`")
+        else:
+            lines.append("- 中心ゾーン: 最も多くのゾーンと接続しているゾーンを中心とする")
+        lines.append("")
+        return "\n".join(lines)
+
+    # layered（または未指定）で階層数が指定されている場合のみディレクティブを出す。
+    if layout in ("", "layered"):
+        tiers = diagram.get("tiers", diagram.get("layers"))
+        try:
+            n = int(tiers) if tiers is not None else 0
+        except (TypeError, ValueError):
+            n = 0
+        if n >= 2:
+            return "\n".join([
+                "## 図レイアウト指定（ユーザー指定・厳守）\n",
+                "以下のレイアウトポリシーに従ってください"
+                "（詳細はシステムプロンプトの「ゾーン配置ポリシー」を参照）:",
+                "- レイアウト方式: **階層型**（`dot` エンジン、`rankdir=TB` の上→下配置）",
+                f"- 階層数: **ちょうど {n} 段**。"
+                f"全ノードをトラフィックの流れ（外部→内部→末端）に沿って上から下へ "
+                f"{n} 段の水平階層に振り分け、同じ段のノードは `{{rank=same; ...}}` で"
+                "横並びに揃えてください。段数が過不足する場合はゾーンの粒度を"
+                f"まとめる／分割して {n} 段に合わせてください。",
+                "",
+            ])
+
+    return ""
+
+
 def build_text(
     devices: list[_YamlDict],
     connections: list[_YamlDict],
     subnets: list[_YamlDict],
     device_map: dict[str, _YamlDict],
     lags: list[_YamlDict] | None = None,
+    diagram: _YamlDict | None = None,
 ) -> str:
     """デバイス・接続・サブネットを LLM 用の構造化テキストに整形する。"""
     lags = lags or []
     lag_lookup = build_lag_lookup(lags)
     lines: list[str] = []
+
+    # 図レイアウト指定（任意）。指定があれば冒頭に明示して LLM に厳守させる。
+    directive = layout_directive(diagram or {})
+    if directive:
+        lines.append(directive)
 
     # ノード一覧
     lines.append(f"## ノード一覧（{len(devices)} 台）\n")
@@ -349,4 +414,5 @@ def parse(path: Path) -> str:
         ノード・接続・サブネット情報を含む構造化テキスト
     """
     model = load_model(path)
-    return build_text(model.devices, model.connections, model.subnets, model.device_map, model.lags)
+    return build_text(model.devices, model.connections, model.subnets, model.device_map, model.lags,
+                      model.diagram)
