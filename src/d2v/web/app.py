@@ -93,7 +93,7 @@ class D2VJobRequest(BaseModel):
     no_split: bool = False
     split_threshold: int = Field(partitioner.DEFAULT_SPLIT_THRESHOLD, ge=1)
     focus: list[str] | None = None
-    hops: int = Field(1, ge=1, le=5)
+    hops: int = Field(1, ge=0, le=5)
     zone: list[str] | None = None
     zone_opacity: float = Field(0.4, ge=0.0, le=1.0)
 
@@ -352,7 +352,7 @@ class FocusPreviewRequest(BaseModel):
     yaml_text: str | None = None
     focus: list[str] | None = None
     line: int | None = Field(None, ge=1, description="カーソル行（1 始まり）")
-    hops: int = Field(1, ge=1, le=5)
+    hops: int = Field(1, ge=0, le=5)
 
 
 @app.post("/api/focus/preview")

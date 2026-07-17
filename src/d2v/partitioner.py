@@ -403,6 +403,7 @@ def _focus_text(
     dist: "OrderedDict[str, int]",
     intra: list[_YamlDict],
     truncated: "dict[str, int]",
+    indirect: "list[tuple[str, str, str, int]]",
 ) -> str:
     """注目ノード集中図のテキストを生成する。
 
@@ -412,6 +413,8 @@ def _focus_text(
         intra: 両端が dist に含まれる物理接続。
         truncated: 境界ノード（hops ホップ地点）で、この先に省略された
             隣接ノードを持つものの device-id → 省略数。
+        indirect: 直接リンクは無いが省略ノードを介して繋がる
+            (u, v, 代表経由ノード, 経由ノード数) の一覧。
     """
     focus_set = set(focus_ids)
 
@@ -423,7 +426,25 @@ def _focus_text(
     multi = len(focus_ids) > 1
 
     lines: list[str] = []
-    if multi:
+    if hops == 0:
+        # hops=0: 指定した注目ノードのみ（相互接続だけ）を描く
+        if multi:
+            lines.append(f"# ノード集中図: {focus_labels} のみ\n")
+            lines.append(
+                f"この図は指定した {len(focus_ids)} 台のノード「{focus_labels}」"
+                "だけを抜き出した部分構成図です。"
+                "**指定ノードのみ**を描き、これらの間の物理接続だけを表示します。"
+                "指定ノードに接続する他のノードは意図的に省略されています。\n"
+            )
+        else:
+            lines.append(f"# ノード集中図: {focus_labels} のみ\n")
+            lines.append(
+                f"この図は指定したノード「{focus_labels}」だけを抜き出した"
+                "部分構成図です。"
+                "**指定ノードのみ**を描き、それに接続する他のノードは"
+                "意図的に省略されています。\n"
+            )
+    elif multi:
         lines.append(
             f"# ノード集中図: {focus_labels} を中心に {hops} ホップ以内\n"
         )
@@ -489,6 +510,21 @@ def _focus_text(
         if line is not None:
             lines.append(line)
 
+    # 間接接続一覧（直接リンクは無いが、省略ノードを介して繋がる注目ノード同士）
+    if indirect:
+        lines.append(
+            f"\n## 間接接続一覧（{len(indirect)} 組・省略ノード経由）\n"
+        )
+        lines.append(
+            "以下のノード同士は直接リンクはありませんが、この図には描かれていない"
+            "中継ノードを経由して繋がっています。これらの関係は**破線のエッジ**で結び、"
+            "矢印は付けず、ラベルに経由ノード（例）を添えてください。"
+            "実線の物理接続とは明確に区別できるようにしてください。\n"
+        )
+        for u, v, via, count in indirect:
+            via_txt = via if count == 1 else f"{via} ほか {count - 1} 台"
+            lines.append(f"- {_label(u)} ┈（{via_txt} 経由）┈ {_label(v)}")
+
     # 関連サブネット
     focus_devices = [
         model.device_map[d] for d in dist if d in model.device_map
@@ -521,6 +557,9 @@ class FocusData:
     included: set[str]             # dist に含まれる device-id 集合
     intra: list[_YamlDict]         # 両端が included に含まれる物理接続
     truncated: dict[str, int]      # 境界ノード device-id → 省略された隣接数
+    # 間接接続: (u, v, 代表経由ノード, 経由ノード数)。u/v は included 内だが
+    # 直接リンクは無く、included 外（省略）の共通隣接ノードを介して繋がる組。
+    indirect: list[tuple[str, str, str, int]]
 
 
 def _focus_data(
@@ -541,8 +580,8 @@ def _focus_data(
 
     if not focus_ids or any(fid not in model.device_map for fid in focus_ids):
         return None
-    if hops < 1:
-        raise ValueError("hops は 1 以上を指定してください。")
+    if hops < 0:
+        raise ValueError("hops は 0 以上を指定してください。")
 
     dist = hop_distances(model, focus_ids, hops)
     included = set(dist)
@@ -568,6 +607,27 @@ def _focus_data(
         if hidden:
             truncated[did] = len(hidden)
 
+    # 間接接続: included 内の 2 ノードが直接リンクされていないが、included 外
+    # （省略された）共通隣接ノードを介して繋がっている場合、その関係を記録する。
+    direct_pairs: set[frozenset[str]] = set()
+    for conn in intra:
+        eps = conn.get("endpoint", [])
+        d0 = eps[0].get("device-id", "")
+        d1 = eps[1].get("device-id", "")
+        if d0 and d1:
+            direct_pairs.add(frozenset((d0, d1)))
+    ordered = list(dist)
+    indirect: list[tuple[str, str, str, int]] = []
+    for i, u in enumerate(ordered):
+        for v in ordered[i + 1:]:
+            if frozenset((u, v)) in direct_pairs:
+                continue
+            common_hidden = sorted(
+                (adj.get(u, set()) & adj.get(v, set())) - included
+            )
+            if common_hidden:
+                indirect.append((u, v, common_hidden[0], len(common_hidden)))
+
     return FocusData(
         focus_ids=focus_ids,
         hops=hops,
@@ -575,6 +635,7 @@ def _focus_data(
         included=included,
         intra=intra,
         truncated=truncated,
+        indirect=indirect,
     )
 
 
@@ -598,7 +659,10 @@ def focus_plan(
         return model.device_map.get(did, {}).get("device-name", did)
 
     key_ids = "-".join(_safe_key(f) for f in focus_ids)
-    if len(focus_ids) > 1:
+    if hops == 0:
+        names = "、".join(_name(f) for f in focus_ids)
+        title = f"ノード集中図: {names} のみ（{len(dist)} 台）"
+    elif len(focus_ids) > 1:
         names = "、".join(_name(f) for f in focus_ids)
         title = f"ノード集中図: {names} を中心に {hops} ホップ以内（{len(dist)} 台）"
     else:
@@ -610,7 +674,8 @@ def focus_plan(
         key=f"focus-{key_ids}-{hops}hop",
         title=title,
         text=_focus_text(
-            model, focus_ids, hops, dist, data.intra, data.truncated
+            model, focus_ids, hops, dist, data.intra, data.truncated,
+            data.indirect,
         ),
     )
 
@@ -727,6 +792,18 @@ def build_focus_dot(
         d1 = eps[1].get("device-id", "")
         cid = conn.get("connection-id", f"{d0}__{d1}")
         lines.append(f"    {_dq(d0)} -> {_dq(d1)} [tooltip={_dq(cid)}];")
+
+    # 間接接続（省略された中継ノードを介して繋がる組）を破線で示す。
+    # 矢印は付けず、レイアウトを歪めないよう constraint=false とする。
+    for u, v, via, count in data.indirect:
+        via_txt = via if count == 1 else f"{via} ほか{count - 1}台"
+        lbl = f"{via_txt} 経由"
+        lines.append(
+            f"    {_dq(u)} -> {_dq(v)} "
+            f'[style=dashed, color="#9AA0A6", arrowhead=none, '
+            f"constraint=false, label={_dq(lbl)}, fontsize=8, "
+            f'fontcolor="#80868B", tooltip={_dq(f"{u} ┈ {v}（{lbl}）")}];'
+        )
 
     lines.append("}")
     return "\n".join(lines)

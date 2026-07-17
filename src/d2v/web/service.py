@@ -182,8 +182,8 @@ def run_d2v_job(
 
 
 def _build_focus(model: "parser.TopologyModel", params: D2VParams) -> partitioner.SubDiagram:
-    if params.hops < 1:
-        raise D2VJobError("--hops は 1 以上を指定してください。")
+    if params.hops < 0:
+        raise D2VJobError("--hops は 0 以上を指定してください。")
     missing = [fid for fid in params.focus if fid not in model.device_map]
     if missing:
         available = ", ".join(sorted(model.device_map)) or "(なし)"

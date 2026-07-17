@@ -56,9 +56,9 @@
         "d2v.hops": {
           "type": "integer",
           "default": 1,
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 3,
-          "description": "注目ノードから何ホップ先までをプレビューに含めるか。"
+          "description": "注目ノードから何ホップ先までをプレビューに含めるか（0 で指定ノードのみ）。"
         },
         "d2v.follow": {
           "type": "boolean",

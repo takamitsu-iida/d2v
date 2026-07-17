@@ -195,7 +195,7 @@ class FocusPreviewPanel {
 <body>
   <div id="toolbar">
     <label>ホップ
-      <input type="range" id="hops" min="1" max="3" step="1" value="1" />
+      <input type="range" id="hops" min="0" max="3" step="1" value="1" />
       <span id="hops-val">1</span>
     </label>
     <label><input type="checkbox" id="follow" checked /> 追従</label>

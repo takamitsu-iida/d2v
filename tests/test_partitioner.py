@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from d2v import partitioner
 from d2v.parser import TopologyModel
 
@@ -164,3 +166,71 @@ def test_focus_data_shared_between_paths():
     plan = partitioner.focus_plan(model, "b", hops=1)
     assert plan is not None
     assert "3 台" in plan.title
+
+
+def test_focus_hops_zero_shows_only_specified_nodes():
+    model = _linear_model()
+    # hops=0 → 指定した a, b のみ（相互接続 a-b だけ）を抽出し、c/d は含まない
+    data = partitioner._focus_data(model, ["a", "b"], hops=0)
+    assert data is not None
+    assert data.included == {"a", "b"}
+    assert [c["connection-id"] for c in data.intra] == ["a__b"]
+
+    plan = partitioner.focus_plan(model, ["a", "b"], hops=0)
+    assert plan is not None
+    assert plan.key == "focus-a-b-0hop"
+    assert "のみ" in plan.title
+
+    dot = partitioner.build_focus_dot(model, ["a", "b"], hops=0)
+    assert dot is not None
+    assert '"a"' in dot and '"b"' in dot
+    assert '"c"' not in dot and '"d"' not in dot
+
+
+def test_focus_hops_zero_draws_indirect_edge_via_omitted_node():
+    # a - c - b（c は共通の中継ノード）。a と b を hops=0 で指定すると、
+    # a と b は直接リンクは無いが c を介して繋がるため間接エッジになる。
+    devices = [
+        {"device-id": "a", "device-name": "A", "device-type": "router", "zone": "z"},
+        {"device-id": "b", "device-name": "B", "device-type": "router", "zone": "z"},
+        {"device-id": "c", "device-name": "C", "device-type": "switch", "zone": "z"},
+    ]
+    conns = [_conn("a", "c"), _conn("c", "b")]
+    conns[0]["connection-id"] = "a__c"
+    conns[1]["connection-id"] = "c__b"
+    model = TopologyModel(
+        devices=devices,
+        connections=conns,
+        subnets=[],
+        device_map={d["device-id"]: d for d in devices},
+    )
+
+    data = partitioner._focus_data(model, ["a", "b"], hops=0)
+    assert data is not None
+    assert data.included == {"a", "b"}
+    assert data.intra == []
+    # a と b は c（省略ノード）を介して繋がる → 間接接続 1 組
+    assert data.indirect == [("a", "b", "c", 1)]
+
+    dot = partitioner.build_focus_dot(model, ["a", "b"], hops=0)
+    assert dot is not None
+    # 破線・矢印なしの間接エッジが描かれ、c は描画されない
+    assert '"c"' not in dot
+    assert '"a" -> "b"' in dot
+    assert "style=dashed" in dot
+    assert "c 経由" in dot
+
+
+def test_focus_no_indirect_edge_when_directly_connected():
+    # a - b の直接リンクがある場合は間接エッジを作らない
+    model = _linear_model()
+    data = partitioner._focus_data(model, ["a", "b"], hops=0)
+    assert data is not None
+    assert [c["connection-id"] for c in data.intra] == ["a__b"]
+    assert data.indirect == []
+
+
+def test_focus_data_rejects_negative_hops():
+    model = _linear_model()
+    with pytest.raises(ValueError):
+        partitioner._focus_data(model, "b", hops=-1)

@@ -69,6 +69,9 @@ def run_d2v() -> None:
   # spine-01 と spine-02 の 2 台を中心に 1 ホップ以内（和集合）を抽出
   python main.py -i examples/sample_topology_large.yaml --focus spine-01 spine-02
 
+  # 指定したノードだけ（相互接続のみ）を描画する
+  python main.py -i examples/sample_topology_large.yaml --focus spine-01 spine-02 --hops 0
+
   # 指定したゾーンだけを描画対象にする（複数指定でまとめて 1 枚）
   python main.py -i examples/sample_topology_large.yaml --zone dc-core dc-fabric
 
@@ -148,7 +151,8 @@ def run_d2v() -> None:
             "注目ノード（device-id）を指定すると、そのノードから --hops ホップ以内の"
             "ノードだけを抜き出した集中図を 1 枚生成する（分割は行わない）。"
             "複数指定（例: --focus spine-01 spine-02）すると、いずれかのノードから"
-            "到達できる範囲の和集合を 1 枚のサブグラフとして抽出する"
+            "到達できる範囲の和集合を 1 枚のサブグラフとして抽出する。"
+            "--hops 0 を指定すると、指定したノードだけ（相互接続のみ）を描画する"
         ),
     )
     ap.add_argument(
@@ -156,7 +160,7 @@ def run_d2v() -> None:
         type=int,
         default=1,
         metavar="N",
-        help="--focus 指定時に注目ノードから何ホップ先まで含めるか（1 または 2 を推奨。デフォルト: 1）",
+        help="--focus 指定時に注目ノードから何ホップ先まで含めるか（0 で指定ノードのみ。1 または 2 を推奨。デフォルト: 1）",
     )
     ap.add_argument(
         "--zone",
