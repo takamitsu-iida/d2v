@@ -83,6 +83,141 @@ def remove_edge_arrows(dot_code: str) -> str:
     )
 
 
+def inject_render_quality(dot_code: str, *, dpi: int = 0, pad: float = 0.0) -> str:
+    """レンダリング品質を上げるグラフ属性（``dpi`` / ``pad``）を注入する。
+
+    グラフ宣言直後に ``graph [dpi=..., pad=...]`` を挿入する。``dpi`` は PNG などの
+    ラスタ出力の解像度を上げてアイコン・文字のジャギーを抑える（SVG では無視される）。
+    ``pad`` は描画領域の外周に余白（インチ）を足し、図の端が切れて見える窮屈さを
+    緩和する。既に同じ属性が指定済みの場合は二重指定を避ける。
+
+    Args:
+        dot_code: Graphviz DOT 形式のコード
+        dpi: ラスタ出力の解像度。0 以下で無効。
+        pad: 外周余白（インチ）。0 以下で無効。
+
+    Returns:
+        品質向上属性を注入した DOT コード
+    """
+    attrs: list[str] = []
+    if dpi > 0 and not re.search(r"\bdpi\s*=", dot_code, re.IGNORECASE):
+        attrs.append(f"dpi={int(dpi)}")
+    if pad > 0 and not re.search(r"\bpad\s*=", dot_code, re.IGNORECASE):
+        attrs.append(f'pad="{pad}"')
+    if not attrs:
+        return dot_code
+    m = _GRAPH_OPEN_RE.search(dot_code)
+    if not m:
+        return dot_code
+    at = m.end()
+    return dot_code[:at] + f"\n    graph [{', '.join(attrs)}];" + dot_code[at:]
+
+
+def emphasize_node_borders(dot_code: str, penwidth: float = 1.6) -> str:
+    """全ノードの枠線を少し太くして立体感（縁取り）を強める。
+
+    グラフ宣言直後にノードのデフォルト属性 ``node [penwidth=...]`` を挿入する。
+    Graphviz のデフォルトは以降に定義されるノードへ累積適用され、DOT 内の後続の
+    ``node [...]``（フォント・形状等）は ``penwidth`` を上書きしないため、淡色で
+    塗られたノードの縁取りが明確になり、フラットすぎる箱がくっきり締まって見える。
+    個別ノードが独自に ``penwidth`` を指定していればそちらが優先される。
+
+    Args:
+        dot_code: Graphviz DOT 形式のコード
+        penwidth: ノード枠線の太さ。0 以下で無効。
+
+    Returns:
+        ノード枠線を強調した DOT コード
+    """
+    if penwidth <= 0:
+        return dot_code
+    m = _GRAPH_OPEN_RE.search(dot_code)
+    if not m:
+        return dot_code
+    at = m.end()
+    return dot_code[:at] + f"\n    node [penwidth={penwidth}];" + dot_code[at:]
+
+
+# 凡例に載せるデバイス種別の並び順と日本語ラベル（README のデバイス表に準拠）。
+_LEGEND_ORDER: list[str] = [
+    "router",
+    "switch",
+    "firewall",
+    "server",
+    "host",
+    "load-balancer",
+]
+_LEGEND_LABELS: dict[str, str] = {
+    "router": "ルータ",
+    "switch": "スイッチ",
+    "firewall": "ファイアウォール",
+    "server": "サーバ",
+    "host": "ホスト",
+    "load-balancer": "ロードバランサ",
+}
+# DOT 内の d2vtype="TYPE"（アイコン用の機械可読属性）を走査する正規表現
+_D2VTYPE_SCAN_RE = re.compile(r'd2vtype\s*=\s*"([^"]*)"')
+
+
+def legend_types(dot_code: str) -> list[str]:
+    """DOT に登場するデバイス種別を凡例掲載順（``_LEGEND_ORDER``）で返す。
+
+    DOT 内の ``d2vtype="..."`` を走査し、実際に登場する種別だけを既定順で抽出する。
+    既に ``cluster_legend`` を含む DOT（例: diff の意味凡例）は独自の凡例を持つため
+    対象外として空リストを返す。
+
+    Args:
+        dot_code: Graphviz DOT 形式のコード（アイコン注入前）
+
+    Returns:
+        凡例に載せるデバイス種別のリスト（対象がなければ空）
+    """
+    if "cluster_legend" in dot_code:
+        return []
+    present = set(_D2VTYPE_SCAN_RE.findall(dot_code))
+    return [t for t in _LEGEND_ORDER if t in present]
+
+
+def build_legend_dot(types: list[str]) -> str:
+    """デバイス種別のアイコン凡例だけを描く独立した DOT を組み立てる。
+
+    各種別のアイコンと名称を縦一列に並べた、単体で完結する ``digraph`` を返す。
+    ノードには ``d2vtype`` を付けておくことで、後段の
+    :func:`icons.inject_icons_into_dot` により本体図と同じアイコンが埋め込まれる。
+
+    Args:
+        types: 凡例に載せるデバイス種別（``_LEGEND_ORDER`` 順を想定）。
+
+    Returns:
+        凡例のみを描く Graphviz DOT 文字列。
+    """
+    node_lines: list[str] = []
+    ids: list[str] = []
+    for t in types:
+        nid = f'"d2vlegend_{t}"'
+        ids.append(nid)
+        color = icons._COLOR.get(t, "#5F6368")
+        label = _LEGEND_LABELS.get(t, t)
+        node_lines.append(
+            f'    {nid} [label="{label}", d2vtype="{t}", shape=box, '
+            f'style="filled,rounded", fillcolor="#FFFFFF", color="{color}", '
+            "penwidth=1.6];"
+        )
+    # 凡例ノードを縦一列に整列させる不可視エッジ
+    stack = f'    {" -> ".join(ids)} [style=invis];' if len(ids) > 1 else ""
+    return (
+        "digraph legend {\n"
+        '    label="凡例"; labelloc=t; fontsize=14;\n'
+        '    fontname="Helvetica,Arial,sans-serif";\n'
+        '    bgcolor="#FFFFFF";\n'
+        "    nodesep=0.25; ranksep=0.25;\n"
+        '    node [fontname="Helvetica,Arial,sans-serif", fontsize=10];\n'
+        + "\n".join(node_lines)
+        + ("\n" + stack if stack else "")
+        + "\n}\n"
+    )
+
+
 def neutralize_cluster_fill(dot_code: str) -> str:
     """cluster の `style="filled";` を除去し、淡い `bgcolor` を優先させる。
 
@@ -217,6 +352,7 @@ def render(
     stem: str = "diagram",
     fmt: str = "png",
     zone_opacity: float = 0.4,
+    show_legend: bool = True,
 ) -> Path:
     """DOT コードをレンダリングして画像ファイルを保存する。
 
@@ -227,21 +363,86 @@ def render(
         fmt: 出力フォーマット ("png" または "svg")
         zone_opacity: ゾーン（cluster）背景色の不透明度 0.0〜1.0。
             1.0 未満のとき `bgcolor` にアルファ値を付与して背景を淡くする。
+        show_legend: デバイス種別のアイコン凡例を **別ファイル**
+            （``<stem>_legend.<fmt>``）として出力するか。本体図には埋め込まない。
 
     Returns:
-        生成した画像ファイルの Path
+        生成した本体画像ファイルの Path
     """
+    # 凡例掲載対象の種別は、アイコン注入で d2vtype が消える前に把握しておく
+    types = legend_types(dot_code) if show_legend else []
     # cluster の style="filled" を除去して淡い bgcolor を優先させてから透過を付与する
     dot_code = neutralize_cluster_fill(dot_code)
     dot_code = remove_edge_arrows(dot_code)
     dot_code = apply_zone_opacity(dot_code, zone_opacity)
+    # ノードの縁取りを強めてフラットな箱に立体感を与える
+    dot_code = emphasize_node_borders(dot_code)
     # LLM 生成 DOT の d2vtype 属性付きノードへアイコンを注入し、探索先を設定する
     dot_code = icons.inject_icons_into_dot(dot_code)
     dot_code = inject_imagepath(dot_code)
+    # PNG ラスタ出力の解像度を上げ、外周に余白を足して視認性を高める
+    dot_code = inject_render_quality(
+        dot_code,
+        dpi=settings.diagram_dpi if fmt == "png" else 0,
+        pad=0.4,
+    )
     # 横長すぎる図は縦横比を目標（既定 4:3）に近づける
     dot_code = fit_aspect_ratio(dot_code, settings.diagram_aspect_ratio)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    rendered_path = _rasterize(dot_code, output_dir, stem, fmt)
+
+    # 凡例は本体図に埋め込まず、独立した画像ファイルとして出力する
+    if types:
+        try:
+            render_legend(types, output_dir, f"{stem}_legend", fmt)
+        except (RenderError, GraphvizNotFoundError):
+            pass
+
+    return rendered_path
+
+
+def render_legend(
+    types: list[str],
+    output_dir: Path,
+    stem: str = "legend",
+    fmt: str = "png",
+) -> Path:
+    """デバイス種別のアイコン凡例だけを独立した画像ファイルとして出力する。
+
+    Args:
+        types: 凡例に載せるデバイス種別（``legend_types`` で得た並び順）。
+        output_dir: 出力先ディレクトリ（存在しない場合は自動作成）。
+        stem: 出力ファイル名（拡張子なし）。
+        fmt: 出力フォーマット ("png" または "svg")。
+
+    Returns:
+        生成した凡例画像ファイルの Path。
+    """
+    dot_code = build_legend_dot(types)
+    dot_code = icons.inject_icons_into_dot(dot_code)
+    dot_code = inject_imagepath(dot_code)
+    dot_code = inject_render_quality(
+        dot_code,
+        dpi=settings.diagram_dpi if fmt == "png" else 0,
+        pad=0.2,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return _rasterize(dot_code, output_dir, stem, fmt)
+
+
+def _rasterize(dot_code: str, output_dir: Path, stem: str, fmt: str) -> Path:
+    """加工済み DOT を Graphviz でレンダリングし、画像と .dot を保存する。
+
+    Args:
+        dot_code: すべての後処理を適用済みの DOT コード。
+        output_dir: 出力先ディレクトリ（呼び出し側で作成済みを想定）。
+        stem: 出力ファイル名（拡張子なし）。
+        fmt: 出力フォーマット ("png" または "svg")。
+
+    Returns:
+        生成した画像ファイルの Path。
+    """
     # DOT ソースも保存しておく（デバッグ・差分確認用）
     dot_path = output_dir / f"{stem}.dot"
     dot_path.write_text(dot_code, encoding="utf-8")

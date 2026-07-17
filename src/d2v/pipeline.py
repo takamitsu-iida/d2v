@@ -41,6 +41,7 @@ class PipelineResult:
     best_dot: str
     best_result: EvaluationResult
     best_image: Path
+    best_legend: Path | None = None
     records: list[IterationRecord] = field(default_factory=list)
 
     @property
@@ -283,6 +284,14 @@ def run(
     best_final_image = output_dir / f"{stem}_best.{fmt}"
     shutil.copy2(best_record.image_path, best_final_image)
 
+    # 凡例は別ファイル（<stem>_legend.<fmt>）として出力されるため、ベスト図と
+    # 並べて参照できるよう best 側にも一緒にコピーする（存在する場合のみ）。
+    best_legend_src = best_record.image_path.with_name(f"{stem}_legend.{fmt}")
+    best_final_legend: Path | None = None
+    if best_legend_src.exists():
+        best_final_legend = output_dir / f"{stem}_best_legend.{fmt}"
+        shutil.copy2(best_legend_src, best_final_legend)
+
     # ── サマリーテーブル ──────────────────────────────────────────
     _print_summary(records, threshold)
 
@@ -299,6 +308,7 @@ def run(
         best_dot=best_record.dot_code,
         best_result=best_record.result,
         best_image=best_final_image,
+        best_legend=best_final_legend,
         records=records,
     )
 

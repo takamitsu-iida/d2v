@@ -58,6 +58,7 @@ class DiagramOutput:
     title: str
     final_image: Path   # 出力ルートに集約したベスト画像
     result: PipelineResult
+    final_legend: Path | None = None  # 集約した凡例画像（別ファイル・任意）
 
     @property
     def score(self) -> int:
@@ -236,6 +237,7 @@ def _run_single(
         key="single",
         title="構成図",
         final_image=result.best_image,
+        final_legend=result.best_legend,
         result=result,
     )
 
@@ -275,10 +277,16 @@ def _run_multi(
         # ベスト画像を出力ルートへ集約
         final_path = params.output_dir / f"{sub_stem}.{params.fmt}"
         shutil.copy2(result.best_image, final_path)
+        # 凡例（別ファイル）もベスト図と並べて集約する（存在する場合のみ）
+        final_legend: Path | None = None
+        if result.best_legend is not None and result.best_legend.exists():
+            final_legend = params.output_dir / f"{sub_stem}_legend.{params.fmt}"
+            shutil.copy2(result.best_legend, final_legend)
         output = DiagramOutput(
             key=diag.key,
             title=diag.title,
             final_image=final_path,
+            final_legend=final_legend,
             result=result,
         )
         outputs.append(output)

@@ -326,6 +326,7 @@ def _print_single_summary(args: argparse.Namespace, result: "service.D2VJobResul
         f"最終スコア       : [{score_color}]{best.score}/10[/{score_color}]\n"
         f"イテレーション数 : {output.result.total_iterations}/{args.max_iter}\n"
         f"出力ファイル     : [bold]{output.final_image}[/bold]"
+        + (f"\n凡例ファイル     : [bold]{output.final_legend}[/bold]" if output.final_legend else "")
         + (f"\nスコアグラフ     : [bold]{plot_path}[/bold]" if plot_path else ""),
         title="[bold green]✓ 完了[/bold green]",
         expand=False,

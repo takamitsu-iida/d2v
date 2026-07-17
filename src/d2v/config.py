@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # みなして rankdir を切り替えない（過剰な組み替えを防ぐ）。
     diagram_aspect_tolerance: float = 2.0
 
+    # PNG ラスタ出力の解像度（DPI）。既定の 96 相当より高くすることでアイコン・
+    # 文字のジャギーを抑え、拡大しても粗くならないようにする。SVG には影響しない。
+    diagram_dpi: int = 150
+
     # v2d（画像→トポロジ）: vision LLM へ渡す画像の最大辺ピクセル。
     # これを超える画像は縦横比を保って縮小する（トークン量と精度のバランス）。
     v2d_max_image_dim: int = 2048
