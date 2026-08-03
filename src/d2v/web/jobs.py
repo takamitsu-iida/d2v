@@ -339,5 +339,15 @@ def sse_format(event: ProgressEvent) -> str:
     return f"event: {event.stage}\ndata: {payload}\n\n"
 
 
+def sse_stream(job: Job):
+    """ジョブの進捗を SSE フレームとして yield し、完了時に終端 end イベントを送る。"""
+    import json
+
+    for event in job.stream():
+        yield sse_format(event)
+    final = json.dumps({"state": job.state.value, "error": job.error}, ensure_ascii=False)
+    yield f"event: end\ndata: {final}\n\n"
+
+
 # プロセス内シングルトン（app.py から共有）
 registry = JobRegistry()

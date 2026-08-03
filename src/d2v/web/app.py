@@ -20,6 +20,13 @@ from d2v import partitioner
 from d2v.config import settings
 from d2v.web import jobs
 from d2v.web.jobs import JobBusyError
+from d2v.web.service import (
+    DiffHandler,
+    FocusPreviewHandler,
+    LintHandler,
+    ReportHandler,
+    ValidateHandler,
+)
 
 # リポジトリルートと examples ディレクトリ（src/d2v/web/app.py から 3 つ上がルート）
 _ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -36,28 +43,16 @@ app = FastAPI(
 @app.get("/api/meta")
 def get_meta() -> dict:
     """UI 初期化に必要なメタ情報（プロバイダ・既定値・サンプル一覧）を返す。"""
-    # トポロジのサンプルのみを列挙する（ポリシーファイル等は除外）
-    examples = (
-        sorted(
-            p.name
-            for p in _EXAMPLES_DIR.glob("*.yaml")
-            if "policy" not in p.name
-        )
-        if _EXAMPLES_DIR.exists()
-        else []
-    )
+    examples = sorted(
+        p.name for p in _EXAMPLES_DIR.glob("*.yaml") if "policy" not in p.name
+    ) if _EXAMPLES_DIR.exists() else []
     return {
         "llm_provider": settings.llm_provider,
         "examples": examples,
         "defaults": {
-            "format": "png",
-            "max_iter": 3,
-            "threshold": 8,
-            "patience": 1,
+            "format": "png", "max_iter": 3, "threshold": 8, "patience": 1,
             "split_threshold": partitioner.DEFAULT_SPLIT_THRESHOLD,
-            "no_split": False,
-            "hops": 1,
-            "zone_opacity": 0.4,
+            "no_split": False, "hops": 1, "zone_opacity": 0.4,
         },
         "formats": ["png", "svg"],
         "modes": ["auto", "single", "split", "focus", "zone"],
@@ -97,6 +92,14 @@ class D2VJobRequest(BaseModel):
     zone: list[str] | None = None
     zone_opacity: float = Field(0.4, ge=0.0, le=1.0)
 
+    def to_options(self) -> dict:
+        return {
+            "fmt": self.format, "max_iter": self.max_iter, "threshold": self.threshold,
+            "patience": self.patience, "no_split": self.no_split,
+            "split_threshold": self.split_threshold, "focus": self.focus,
+            "hops": self.hops, "zone": self.zone, "zone_opacity": self.zone_opacity,
+        }
+
 
 def _resolve_input_text(req: D2VJobRequest) -> str:
     """リクエストから入力 YAML 本文を取り出す（検証つき）。"""
@@ -129,23 +132,10 @@ def create_d2v_job(req: D2VJobRequest) -> dict:
     """d2v ジョブを作成し、job_id を返す。"""
     if req.format not in ("png", "svg"):
         raise HTTPException(400, "format は png または svg を指定してください。")
-    input_text = _resolve_input_text(req)
-    options = {
-        "fmt": req.format,
-        "max_iter": req.max_iter,
-        "threshold": req.threshold,
-        "patience": req.patience,
-        "no_split": req.no_split,
-        "split_threshold": req.split_threshold,
-        "focus": req.focus,
-        "hops": req.hops,
-        "zone": req.zone,
-        "zone_opacity": req.zone_opacity,
-    }
     try:
         job = jobs.registry.create_d2v_job(
-            input_text=input_text,
-            options=options,
+            input_text=_resolve_input_text(req),
+            options=req.to_options(),
             request_meta=req.model_dump(exclude={"yaml_text"}),
         )
     except JobBusyError as e:
@@ -193,32 +183,10 @@ def _load_model_from_text(text: str):
 
 @app.post("/api/validate")
 def validate_topology(req: ValidateRequest) -> dict:
-    """トポロジ YAML を同期的にセマンティック検証し、結果を返す。
-
-    検証は決定論的で高速なため（LLM 不要）、ジョブ化せず即時に結果を返す。
-    ``explain=True`` のときのみ LLM で理由・修正案を付与する（失敗しても検証結果は返す）。
-    """
-    from d2v import validator
-
+    """トポロジ YAML を同期的にセマンティック検証し、結果を返す。"""
     text = _read_yaml_source(req.source, req.example, req.yaml_text)
     model = _load_model_from_text(text)
-
-    report = validator.validate(model)
-
-    explain_error: str | None = None
-    if req.explain and report.issues:
-        try:
-            report = validator.explain(report, model)
-        except (SystemExit, Exception) as e:  # noqa: BLE001 - 検証結果は必ず返す
-            explain_error = f"説明の生成に失敗しました: {e}"
-
-    return {
-        "ok": report.ok,
-        "passed": report.passed(strict=req.strict),
-        "counts": report.counts,
-        "issues": [i.model_dump() for i in report.issues],
-        "explain_error": explain_error,
-    }
+    return ValidateHandler().handle(model, req.explain, req.strict)
 
 
 # ---------------------------------------------------------------------------
@@ -247,51 +215,18 @@ class DiffRequest(BaseModel):
 @app.post("/api/diff")
 def diff_topologies(req: DiffRequest) -> dict:
     """2 つのトポロジ YAML の構造差分を算出し、差分図（任意）を生成する。"""
-    import uuid
-
-    from d2v import diff as diff_mod
-
     if req.format not in ("png", "svg"):
         raise HTTPException(400, "format は png または svg を指定してください。")
-
-    before_text = _read_yaml_source(
-        req.before.source, req.before.example, req.before.yaml_text
+    before_model = _load_model_from_text(
+        _read_yaml_source(req.before.source, req.before.example, req.before.yaml_text)
     )
-    after_text = _read_yaml_source(
-        req.after.source, req.after.example, req.after.yaml_text
+    after_model = _load_model_from_text(
+        _read_yaml_source(req.after.source, req.after.example, req.after.yaml_text)
     )
-    before_model = _load_model_from_text(before_text)
-    after_model = _load_model_from_text(after_text)
-
-    topo_diff = diff_mod.compare(before_model, after_model)
-
-    summary_error: str | None = None
-    if req.summarize and not topo_diff.is_empty():
-        try:
-            topo_diff = diff_mod.summarize(topo_diff)
-        except (SystemExit, Exception) as e:  # noqa: BLE001 - 差分は必ず返す
-            summary_error = f"要約の生成に失敗しました: {e}"
-
-    image_token: str | None = None
-    if req.image and not topo_diff.is_empty():
-        image_token = uuid.uuid4().hex
-        out_dir = _ROOT / "output" / "webui" / "diff" / image_token
-        try:
-            img = diff_mod.render_diff_diagram(
-                before_model, after_model, topo_diff, out_dir,
-                stem="diff", fmt=req.format,
-            )
-            jobs.registry.store_diff_image(image_token, img)
-        except Exception:  # noqa: BLE001 - 図が作れなくても差分は返す
-            image_token = None
-
-    return {
-        "diff": topo_diff.model_dump(),
-        "is_empty": topo_diff.is_empty(),
-        "image_token": image_token,
-        "format": req.format,
-        "summary_error": summary_error,
-    }
+    return DiffHandler().handle(
+        before_model, after_model, req.summarize, req.image, req.format,
+        store_image=jobs.registry.store_diff_image,
+    )
 
 
 @app.get("/api/diff/image/{token}")
@@ -354,63 +289,12 @@ class FocusPreviewRequest(BaseModel):
 
 @app.post("/api/focus/preview")
 def focus_preview(req: FocusPreviewRequest) -> dict:
-    """注目ノード周辺（hops ホップ以内）の集中図 SVG を同期生成して返す。
-
-    レンダリングは決定論的（LLM 不使用）なので即時に完結する。
-    ライブ編集では不正 YAML・未解決が頻繁に起きるため、注目ノードが決まらない
-    ／存在しない場合も 200 で構造化情報を返す（呼び出し側が直前の図を保持できる）。
-    """
-    import tempfile
-
-    from d2v import edit_assist, partitioner
-
+    """注目ノード周辺の集中図 SVG を同期生成して返す。"""
     text = _read_yaml_source(req.source, req.example, req.yaml_text)
     model = _load_model_from_text(text)
-
-    # 注目ノードの決定: focus 明示 > line 解決
-    context = "explicit"
-    device_lines: dict[str, int] = {}
-    focus_ids = list(req.focus) if req.focus else []
-    if not focus_ids and req.line is not None:
-        res = edit_assist.resolve_focus(text, req.line)
-        focus_ids = res.focus_ids
-        context = res.context
-        device_lines = res.device_lines
-    if not device_lines:
-        # 明示 focus のときも双方向ジャンプ用に定義行を返す
-        _, device_lines = edit_assist._parse_spans(text)
-
-    base = {
-        "svg": None,
-        "focus": focus_ids,
-        "context": context,
-        "hops": req.hops,
-        "device_lines": device_lines,
-        "not_found": [],
-        "message": None,
-    }
-
-    if not focus_ids:
-        base["message"] = "注目ノードを特定できませんでした。"
-        return base
-
-    missing = [f for f in focus_ids if f not in model.device_map]
-    if missing:
-        base["not_found"] = missing
-        base["message"] = f"存在しない device-id: {', '.join(missing)}"
-        return base
-
-    dot_code = partitioner.build_focus_dot(model, focus_ids, req.hops)
-    if dot_code is None:
-        base["message"] = "集中図を生成できませんでした。"
-        return base
-
-    from d2v import renderer
-
-    with tempfile.TemporaryDirectory() as tmp:
-        img = renderer.render(dot_code, Path(tmp), stem="focus", fmt="svg")
-        base["svg"] = img.read_text(encoding="utf-8")
-    return base
+    return FocusPreviewHandler().handle(
+        model, text, list(req.focus or []), req.line, req.hops
+    )
 
 
 class LintRequest(BaseModel):
@@ -424,43 +308,10 @@ class LintRequest(BaseModel):
 
 @app.post("/api/lint")
 def lint_topology(req: LintRequest) -> dict:
-    """design lint（セマンティック検証）を行い、各 issue を行番号付きで返す。
-
-    エディタで波線（diagnostics）を出すため、issue の ``targets``
-    （device-id / connection-id / subnet-id）を YAML 上の行へ解決して付与する。
-    行を特定できない issue は ``line=null`` を返す（呼び出し側で先頭行に集約）。
-    """
-    from d2v import edit_assist, validator
-
+    """design lint を行い、各 issue を行番号付きで返す。"""
     text = _read_yaml_source(req.source, req.example, req.yaml_text)
     model = _load_model_from_text(text)
-
-    report = validator.validate(model)
-    sym = edit_assist.symbol_lines(text)
-
-    issues: list[dict] = []
-    for iss in report.issues:
-        line: int | None = None
-        for t in iss.targets:
-            if t in sym:
-                line = sym[t]
-                break
-        issues.append(
-            {
-                "rule": iss.rule,
-                "severity": iss.severity,
-                "message": iss.message,
-                "targets": iss.targets,
-                "line": line,
-            }
-        )
-
-    return {
-        "ok": report.ok,
-        "passed": report.passed(strict=req.strict),
-        "counts": report.counts,
-        "issues": issues,
-    }
+    return LintHandler().handle(model, text, req.strict)
 
 
 @app.get("/api/jobs")
@@ -485,19 +336,8 @@ def stream_job_events(job_id: str) -> StreamingResponse:
     job = jobs.registry.get(job_id)
     if job is None:
         raise HTTPException(404, "ジョブが見つかりません。")
-
-    def gen():
-        for event in job.stream():
-            yield jobs.sse_format(event)
-        # 終端イベント（最終状態を通知）
-        import json
-        final = json.dumps(
-            {"state": job.state.value, "error": job.error}, ensure_ascii=False
-        )
-        yield f"event: end\ndata: {final}\n\n"
-
     return StreamingResponse(
-        gen(),
+        jobs.sse_stream(job),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -556,6 +396,21 @@ _ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 _MAX_IMAGE_BYTES = 12_000_000
 
 
+async def _read_image_upload(image: UploadFile) -> bytes:
+    """UploadFile を検証しバイト列を返す（OWASP 不正ファイルアップロード対策）。"""
+    ext = Path(image.filename or "").suffix.lower()
+    if ext not in _ALLOWED_IMAGE_EXTS:
+        raise HTTPException(400, "対応画像は PNG / JPEG のみです。")
+    if image.content_type not in _ALLOWED_IMAGE_TYPES:
+        raise HTTPException(400, f"未対応の Content-Type: {image.content_type}")
+    data = await image.read()
+    if not data:
+        raise HTTPException(400, "空のファイルです。")
+    if len(data) > _MAX_IMAGE_BYTES:
+        raise HTTPException(413, "画像が大きすぎます（上限 12MB）。")
+    return data
+
+
 @app.post("/api/v2d/jobs")
 async def create_v2d_job(
     image: UploadFile = File(...),
@@ -566,35 +421,18 @@ async def create_v2d_job(
     """画像アップロードで v2d ジョブを作成し、job_id を返す。"""
     if format not in ("png", "svg"):
         raise HTTPException(400, "format は png または svg を指定してください。")
-    # 拡張子・MIME を検査（OWASP: 不正ファイルのアップロード対策）
-    ext = Path(image.filename or "").suffix.lower()
-    if ext not in _ALLOWED_IMAGE_EXTS:
-        raise HTTPException(400, "対応画像は PNG / JPEG のみです。")
-    if image.content_type not in _ALLOWED_IMAGE_TYPES:
-        raise HTTPException(400, f"未対応の Content-Type: {image.content_type}")
-    data = await image.read()
-    if len(data) == 0:
-        raise HTTPException(400, "空のファイルです。")
-    if len(data) > _MAX_IMAGE_BYTES:
-        raise HTTPException(413, "画像が大きすぎます（上限 12MB）。")
-
+    data = await _read_image_upload(image)
+    meta = {"filename": image.filename, "has_truth": bool(truth and truth.strip()), "rerender": rerender, "format": format}
     try:
         job = jobs.registry.create_v2d_job(
-            image_bytes=data,
-            image_filename=image.filename or "input.png",
-            truth_text=truth,
-            rerender=rerender,
-            fmt=format,
-            request_meta={
-                "filename": image.filename,
-                "has_truth": bool(truth and truth.strip()),
-                "rerender": rerender,
-                "format": format,
-            },
+            image_bytes=data, image_filename=image.filename or "input.png",
+            truth_text=truth, rerender=rerender, fmt=format, request_meta=meta,
         )
     except JobBusyError as e:
         raise HTTPException(429, str(e))
     return {"job_id": job.id, "state": job.state.value}
+
+
 def _require_v2d(job_id: str):
     """v2d ジョブと結果を取得する。"""
     job = jobs.registry.get(job_id)
@@ -663,26 +501,13 @@ class ReportRequest(BaseModel):
 
 @app.post("/api/report")
 def generate_report(req: ReportRequest) -> dict:
-    """トポロジ YAML から設計書を生成して返す（Markdown / JSON）。
-
-    LLM 不要・決定論的なため同期で即時に完結する。
-    """
-    from d2v import docgen
-
+    """トポロジ YAML から設計書を生成して返す（Markdown / JSON）。"""
     if req.format not in ("markdown", "json"):
         raise HTTPException(400, "format は markdown または json を指定してください。")
-
     text = _read_yaml_source(req.source, req.example, req.yaml_text)
     model = _load_model_from_text(text)
     title = req.example.removesuffix(".yaml") if req.example else "topology"
-    data = docgen.extract(model, title=title)
-
-    if req.format == "json":
-        content = docgen.to_json(data)
-    else:
-        content = docgen.to_markdown(data, sections=req.sections)
-
-    return {"format": req.format, "content": content, "title": title}
+    return ReportHandler().handle(model, title, req.format, req.sections)
 
 
 # 静的アセット（app.js / style.css など）を /static で配信する

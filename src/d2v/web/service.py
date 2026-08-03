@@ -13,6 +13,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from d2v import parser, partitioner, pipeline
 from d2v.pipeline import PipelineResult
@@ -397,3 +398,165 @@ def run_v2d_job(
         rerender_image=rerender_image,
         rerender_score=rerender_score,
     )
+
+
+# ---------------------------------------------------------------------------
+# Web ハンドラクラス（app.py 薄いルータから委譲される / HTTP 非依存）
+# ---------------------------------------------------------------------------
+
+_WEB_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
+class ValidateHandler:
+    """セマンティック検証のビジネスロジック。"""
+
+    def handle(self, model, explain: bool, strict: bool) -> dict:
+        from d2v import validator
+
+        report = validator.validate(model)
+        explain_error: str | None = None
+        if explain and report.issues:
+            try:
+                report = validator.explain(report, model)
+            except Exception as e:  # noqa: BLE001
+                explain_error = f"説明の生成に失敗しました: {e}"
+        return {
+            "ok": report.ok,
+            "passed": report.passed(strict=strict),
+            "counts": report.counts,
+            "issues": [i.model_dump() for i in report.issues],
+            "explain_error": explain_error,
+        }
+
+
+class DiffHandler:
+    """意味的 diff のビジネスロジック。"""
+
+    def handle(
+        self,
+        before_model,
+        after_model,
+        summarize: bool,
+        image: bool,
+        fmt: str,
+        store_image: Callable[[str, Path], None] | None = None,
+    ) -> dict:
+        import uuid
+
+        from d2v import diff as diff_mod
+
+        topo_diff = diff_mod.compare(before_model, after_model)
+        summary_error: str | None = None
+        if summarize and not topo_diff.is_empty():
+            try:
+                topo_diff = diff_mod.summarize(topo_diff)
+            except Exception as e:  # noqa: BLE001
+                summary_error = f"要約の生成に失敗しました: {e}"
+
+        image_token: str | None = None
+        if image and not topo_diff.is_empty():
+            image_token = uuid.uuid4().hex
+            out_dir = _WEB_ROOT / "output" / "webui" / "diff" / image_token
+            try:
+                img = diff_mod.render_diff_diagram(
+                    before_model, after_model, topo_diff, out_dir,
+                    stem="diff", fmt=fmt,
+                )
+                if store_image is not None:
+                    store_image(image_token, img)
+            except Exception:  # noqa: BLE001
+                image_token = None
+
+        return {
+            "diff": topo_diff.model_dump(),
+            "is_empty": topo_diff.is_empty(),
+            "image_token": image_token,
+            "format": fmt,
+            "summary_error": summary_error,
+        }
+
+
+class FocusPreviewHandler:
+    """集中図ライブプレビューのビジネスロジック。"""
+
+    def handle(
+        self,
+        model,
+        text: str,
+        focus_ids: list[str],
+        line: int | None,
+        hops: int,
+    ) -> dict:
+        import tempfile
+
+        from d2v import edit_assist, renderer
+
+        context = "explicit"
+        device_lines: dict[str, int] = {}
+        if not focus_ids and line is not None:
+            res = edit_assist.resolve_focus(text, line)
+            focus_ids = res.focus_ids
+            context = res.context
+            device_lines = res.device_lines
+        if not device_lines:
+            _, device_lines = edit_assist._parse_spans(text)
+
+        base: dict = {
+            "svg": None, "focus": focus_ids, "context": context,
+            "hops": hops, "device_lines": device_lines,
+            "not_found": [], "message": None,
+        }
+        if not focus_ids:
+            base["message"] = "注目ノードを特定できませんでした。"
+            return base
+        missing = [f for f in focus_ids if f not in model.device_map]
+        if missing:
+            base["not_found"] = missing
+            base["message"] = f"存在しない device-id: {', '.join(missing)}"
+            return base
+        dot_code = partitioner.build_focus_dot(model, focus_ids, hops)
+        if dot_code is None:
+            base["message"] = "集中図を生成できませんでした。"
+            return base
+        with tempfile.TemporaryDirectory() as tmp:
+            img = renderer.render(dot_code, Path(tmp), stem="focus", fmt="svg")
+            base["svg"] = img.read_text(encoding="utf-8")
+        return base
+
+
+class LintHandler:
+    """design lint のビジネスロジック。"""
+
+    def handle(self, model, text: str, strict: bool) -> dict:
+        from d2v import edit_assist, validator
+
+        report = validator.validate(model)
+        sym = edit_assist.symbol_lines(text)
+        issues: list[dict] = []
+        for iss in report.issues:
+            line: int | None = None
+            for t in iss.targets:
+                if t in sym:
+                    line = sym[t]
+                    break
+            issues.append({
+                "rule": iss.rule, "severity": iss.severity,
+                "message": iss.message, "targets": iss.targets, "line": line,
+            })
+        return {
+            "ok": report.ok,
+            "passed": report.passed(strict=strict),
+            "counts": report.counts,
+            "issues": issues,
+        }
+
+
+class ReportHandler:
+    """設計書生成のビジネスロジック。"""
+
+    def handle(self, model, title: str, fmt: str, sections: list[str] | None) -> dict:
+        from d2v import docgen
+
+        data = docgen.extract(model, title=title)
+        content = docgen.to_json(data) if fmt == "json" else docgen.to_markdown(data, sections=sections)
+        return {"format": fmt, "content": content, "title": title}

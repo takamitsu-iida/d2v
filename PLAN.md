@@ -2034,10 +2034,10 @@ src/d2v/partitioner/
 
 **目的**: エンドポイント関数をハンドラクラスに委譲し、グローバル状態を解消する。
 
-- [ ] 5-1: `ValidateHandler`, `DiffHandler` クラスを `web/service.py` 内に追加
-- [ ] 5-2: `app.py` のエンドポイント関数を薄いルータ（ハンドラ呼び出しのみ）に簡素化
-- [ ] 5-3: グローバル `_DIFF_IMAGES = {}` をインスタンス変数に移動
-- [ ] 5-4: 既存テスト通過確認
+- [x] 5-1: `ValidateHandler`, `DiffHandler` クラスを `web/service.py` 内に追加
+- [x] 5-2: `app.py` のエンドポイント関数を薄いルータ（ハンドラ呼び出しのみ）に簡素化
+- [x] 5-3: グローバル `_DIFF_IMAGES = {}` をインスタンス変数に移動
+- [x] 5-4: 既存テスト通過確認
 
 **完了の定義**: `app.py` の各エンドポイント関数が20行以下になり、既存テストが全通過する。
 
@@ -2065,3 +2065,4 @@ Phase 4 は他のフェーズが完了してから着手することを推奨（
 | 2026-08-03 | Phase 2 完了。`_graph_utils.py` を新規作成（`build_graph`, `pair_multiplicity`, `articulation_and_bridges` を移動）。`validator.py` に `ValidationRule` ABC と `DuplicateDeviceFieldRule` を追加。`_check_duplicate_loopback`/`_check_duplicate_asn` の `@rule` 関数を `DuplicateDeviceFieldRule` インスタンスに置換。`diff.py` の `validator._build_graph` 参照も `_graph_utils` 経由に変更 |
 | 2026-08-03 | Phase 3 完了。`_graph_utils.py` に `EdgeKey` 型エイリアスと `make_edge_key()` を追加。`validator.py` の `_edge_key()` と `diff.py` の `_edge_identity()`（同一実装の重複）を削除し、`make_edge_key()` に統一。`compare()` を `_compare_nodes()`, `_compare_edges()`, `_compare_zones()`, `_compare_subnets()` の4サブ関数に分割。`compare()` 本体が12行に短縮。230テスト全通過 |
 | 2026-08-03 | Phase 4 完了。`partitioner.py`（1025行）を `partitioner/` パッケージに分割。`_dot_builder.py`（共通ユーティリティ）・`_overview.py`（信覧図+詳細図）・`_zone_detail.py`（ゾーン限定図）・`_focus.py`（LLMテキスト生成パス）・`_focus_builder.py`（決定論DOT生成）・`__init__.py`（公開 API 維持）の 6 ファイル構成。全ファイル 302 行以下。230テスト全通過 |
+| 2026-08-03 | Phase 5 完了。`web/app.py` の薄いルータ化。`service.py` に `ValidateHandler`・`DiffHandler`・`FocusPreviewHandler`・`LintHandler`・`ReportHandler` の 5 クラスを追加。`jobs.py` に `sse_stream()` を追加（`stream_job_events` から `gen()` 内部関数を分離）。`D2VJobRequest.to_options()` メソッド追加・`_read_image_upload()` ヘルパー抽出。全エンドポイント関数が 20 行以下。230テスト全通過 |
