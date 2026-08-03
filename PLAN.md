@@ -2020,11 +2020,11 @@ src/d2v/partitioner/
     _dot_builder.py   # 共通テキスト生成ヘルパ
 ```
 
-- [ ] 4-1: 共通ヘルパ関数を `_dot_builder.py` に抽出
-- [ ] 4-2: `OverviewDiagramBuilder` を `_overview.py` に分離
-- [ ] 4-3: `ZoneDetailDiagramBuilder` を `_zone_detail.py` に分離
-- [ ] 4-4: `FocusDiagramBuilder` を `_focus.py` に分離
-- [ ] 4-5: `__init__.py` で `plan()`, `zone_plan()`, `focus_plan()` の公開インターフェースを維持
+- [x] 4-1: 共通ヘルパ関数を `_dot_builder.py` に抽出
+- [x] 4-2: `OverviewDiagramBuilder` を `_overview.py` に分離
+- [x] 4-3: `ZoneDetailDiagramBuilder` を `_zone_detail.py` に分離
+- [x] 4-4: `FocusDiagramBuilder` を `_focus.py` に分離
+- [x] 4-5: `__init__.py` で `plan()`, `zone_plan()`, `focus_plan()` の公開インターフェースを維持
 
 **完了の定義**: 個別ファイルが各300行以下になり、既存テストが全通過する。
 
@@ -2064,3 +2064,4 @@ Phase 4 は他のフェーズが完了してから着手することを推奨（
 | 2026-08-03 | Phase 1 完了。`renderer.py` に `RenderPipeline` クラスを追加。`render()` と `render_legend()` の手動チェーンを `RenderPipeline` に置換。外部インターフェース不変 |
 | 2026-08-03 | Phase 2 完了。`_graph_utils.py` を新規作成（`build_graph`, `pair_multiplicity`, `articulation_and_bridges` を移動）。`validator.py` に `ValidationRule` ABC と `DuplicateDeviceFieldRule` を追加。`_check_duplicate_loopback`/`_check_duplicate_asn` の `@rule` 関数を `DuplicateDeviceFieldRule` インスタンスに置換。`diff.py` の `validator._build_graph` 参照も `_graph_utils` 経由に変更 |
 | 2026-08-03 | Phase 3 完了。`_graph_utils.py` に `EdgeKey` 型エイリアスと `make_edge_key()` を追加。`validator.py` の `_edge_key()` と `diff.py` の `_edge_identity()`（同一実装の重複）を削除し、`make_edge_key()` に統一。`compare()` を `_compare_nodes()`, `_compare_edges()`, `_compare_zones()`, `_compare_subnets()` の4サブ関数に分割。`compare()` 本体が12行に短縮。230テスト全通過 |
+| 2026-08-03 | Phase 4 完了。`partitioner.py`（1025行）を `partitioner/` パッケージに分割。`_dot_builder.py`（共通ユーティリティ）・`_overview.py`（信覧図+詳細図）・`_zone_detail.py`（ゾーン限定図）・`_focus.py`（LLMテキスト生成パス）・`_focus_builder.py`（決定論DOT生成）・`__init__.py`（公開 API 維持）の 6 ファイル構成。全ファイル 302 行以下。230テスト全通過 |
