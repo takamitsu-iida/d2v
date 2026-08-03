@@ -10,6 +10,7 @@ from __future__ import annotations
 import ipaddress
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
+from typing import Any
 
 from d2v import icons
 from d2v import parser
@@ -19,7 +20,7 @@ from d2v.parser import TopologyModel
 # 分割を発動するデフォルトのノード数しきい値
 DEFAULT_SPLIT_THRESHOLD = 40
 
-_YamlDict = dict
+_YamlDict = dict[str, Any]
 
 
 @dataclass

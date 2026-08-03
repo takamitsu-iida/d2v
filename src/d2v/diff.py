@@ -25,6 +25,7 @@ from rich.console import Group, RenderableType
 from rich.text import Text
 
 from d2v import icons
+from d2v._graph_utils import make_edge_key
 from d2v.parser import TopologyModel
 
 _YamlDict = dict[str, Any]
@@ -114,16 +115,6 @@ def _node_attrs(dev: _YamlDict) -> dict[str, str | None]:
     }
 
 
-def _edge_identity(conn: _YamlDict) -> frozenset[tuple[str | None, str | None]] | None:
-    """無向・ポート込みの接続キーを返す（端点が 2 個でなければ None）。"""
-    eps = conn.get("endpoint", []) or []
-    if len(eps) != 2:
-        return None
-    a = (eps[0].get("device-id"), eps[0].get("interface-id"))
-    b = (eps[1].get("device-id"), eps[1].get("interface-id"))
-    return frozenset((a, b))
-
-
 def _edge_label(conn: _YamlDict) -> str:
     """接続の表示ラベル（connection-id 優先、無ければ端点から合成）。"""
     cid = conn.get("connection-id")
@@ -141,7 +132,7 @@ def _edge_map(model: TopologyModel) -> dict[frozenset, str]:
     """接続キー → 表示ラベルの辞書を返す。"""
     result: dict[frozenset, str] = {}
     for conn in model.connections:
-        key = _edge_identity(conn)
+        key = make_edge_key(conn)
         if key is not None:
             result.setdefault(key, _edge_label(conn))
     return result
@@ -174,14 +165,13 @@ def _subnet_map(model: TopologyModel) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def compare(before: TopologyModel, after: TopologyModel) -> TopologyDiff:
-    """2 つのトポロジモデルを比較し ``TopologyDiff`` を返す。"""
+def _compare_nodes(
+    before: TopologyModel, after: TopologyModel
+) -> tuple[list[str], list[str], list[NodeChange]]:
     before_ids = set(before.device_map)
     after_ids = set(after.device_map)
-
     nodes_added = sorted(after_ids - before_ids)
     nodes_removed = sorted(before_ids - after_ids)
-
     nodes_changed: list[NodeChange] = []
     for did in sorted(before_ids & after_ids):
         b_attrs = _node_attrs(before.device_map[did])
@@ -193,30 +183,45 @@ def compare(before: TopologyModel, after: TopologyModel) -> TopologyDiff:
         ]
         if changes:
             nodes_changed.append(NodeChange(device_id=did, changes=changes))
+    return nodes_added, nodes_removed, nodes_changed
 
+
+def _compare_edges(
+    before: TopologyModel, after: TopologyModel
+) -> tuple[list[str], list[str]]:
     before_edges = _edge_map(before)
     after_edges = _edge_map(after)
-    edges_added = sorted(
-        label for key, label in after_edges.items() if key not in before_edges
-    )
-    edges_removed = sorted(
-        label for key, label in before_edges.items() if key not in after_edges
+    return (
+        sorted(label for key, label in after_edges.items() if key not in before_edges),
+        sorted(label for key, label in before_edges.items() if key not in after_edges),
     )
 
+
+def _compare_zones(
+    before: TopologyModel, after: TopologyModel
+) -> tuple[list[str], list[str]]:
     before_zones = _zone_set(before)
     after_zones = _zone_set(after)
-    zones_added = sorted(after_zones - before_zones)
-    zones_removed = sorted(before_zones - after_zones)
+    return sorted(after_zones - before_zones), sorted(before_zones - after_zones)
 
+
+def _compare_subnets(
+    before: TopologyModel, after: TopologyModel
+) -> tuple[list[str], list[str]]:
     before_subnets = _subnet_map(before)
     after_subnets = _subnet_map(after)
-    subnets_added = sorted(
-        label for key, label in after_subnets.items() if key not in before_subnets
-    )
-    subnets_removed = sorted(
-        label for key, label in before_subnets.items() if key not in after_subnets
+    return (
+        sorted(label for key, label in after_subnets.items() if key not in before_subnets),
+        sorted(label for key, label in before_subnets.items() if key not in after_subnets),
     )
 
+
+def compare(before: TopologyModel, after: TopologyModel) -> TopologyDiff:
+    """2 つのトポロジモデルを比較し ``TopologyDiff`` を返す。"""
+    nodes_added, nodes_removed, nodes_changed = _compare_nodes(before, after)
+    edges_added, edges_removed = _compare_edges(before, after)
+    zones_added, zones_removed = _compare_zones(before, after)
+    subnets_added, subnets_removed = _compare_subnets(before, after)
     return TopologyDiff(
         nodes_added=nodes_added,
         nodes_removed=nodes_removed,
@@ -360,7 +365,7 @@ def _collect_edge_status(
     entries: dict[frozenset, dict[str, Any]] = {}
     for model, flag in ((before, "before"), (after, "after")):
         for conn in model.connections:
-            key = _edge_identity(conn)
+            key = make_edge_key(conn)
             if key is None:
                 continue
             eps = conn.get("endpoint", [])
@@ -558,13 +563,13 @@ def impact(
     連結成分を求める。最大成分を「到達可能に残るコア」とし、そこから切り離された
     ノードを到達不能（分断された影響範囲）として返す。
     """
-    from d2v import validator
+    from d2v._graph_utils import build_graph
 
     removed_dev_set = set(removed_devices or [])
     removed_edge_pairs = [tuple(e) for e in (removed_edges or [])]
 
     # 元グラフを可変コピーして除去を適用する
-    adj = {k: set(v) for k, v in validator._build_graph(model).items()}
+    adj = {k: set(v) for k, v in build_graph(model).items()}
 
     edge_labels: list[str] = []
     for a, b in removed_edge_pairs:
@@ -684,7 +689,7 @@ def build_impact_dot(model: TopologyModel, report: ImpactReport) -> str:
                 _emit_node(did, "    ")
 
     for conn in model.connections:
-        key = _edge_identity(conn)
+        key = make_edge_key(conn)
         if key is None:
             continue
         eps = conn.get("endpoint", [])

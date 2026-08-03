@@ -20,6 +20,7 @@ import ipaddress
 import json
 import logging
 import re
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,6 +30,7 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from d2v._graph_utils import articulation_and_bridges, build_graph, make_edge_key, pair_multiplicity
 from d2v.errors import InputError
 from d2v.parser import TopologyModel, build_text
 
@@ -227,6 +229,65 @@ def rule(func: RuleFunc) -> RuleFunc:
     return func
 
 
+class ValidationRule(ABC):
+    """検証ルールの抗象基底クラス。
+
+    ``__call__`` を実装するため ``RuleFunc`` として ``_RULES`` に登録できる。
+    """
+
+    @abstractmethod
+    def check(self, model: TopologyModel) -> list[ValidationIssue]: ...
+
+    def __call__(self, model: TopologyModel) -> list[ValidationIssue]:
+        return self.check(model)
+
+
+class DuplicateDeviceFieldRule(ValidationRule):
+    """デバイスの指定フィールドが複数デバイスで重複している場合を検出する汎用ルール。
+
+    Args:
+        rule_id: ValidationIssue.rule に使う識別子。
+        field: 重複を調べる device フィールド名。
+        severity: "error" | "warning" | "info"
+        message: {key} と {count} を含む format 文字列。
+        normalize: フィールド値をグループキーに変換する関数（省略時は str()）。
+    """
+
+    def __init__(
+        self,
+        rule_id: str,
+        field: str,
+        severity: str,
+        message: str,
+        *,
+        normalize: Callable[[Any], str] | None = None,
+    ) -> None:
+        self.rule_id = rule_id
+        self.field = field
+        self.severity = severity
+        self.message = message
+        self._normalize: Callable[[Any], str] = normalize or str
+
+    def check(self, model: TopologyModel) -> list[ValidationIssue]:
+        groups: dict[str, list[str]] = {}
+        for dev in model.devices:
+            val = dev.get(self.field)
+            if val is None:
+                continue
+            key = self._normalize(val)
+            groups.setdefault(key, []).append(dev.get("device-id", ""))
+        return [
+            ValidationIssue(
+                rule=self.rule_id,
+                severity=self.severity,
+                message=self.message.format(key=key, count=len(devs)),
+                targets=devs,
+            )
+            for key, devs in groups.items()
+            if len(devs) > 1
+        ]
+
+
 # ---------------------------------------------------------------------------
 # 検証本体
 # ---------------------------------------------------------------------------
@@ -277,16 +338,6 @@ def _iface_ids(dev: _YamlDict) -> set[str]:
     }
 
 
-def _edge_key(conn: _YamlDict) -> frozenset[tuple[str | None, str | None]] | None:
-    """無向・ポート込みの接続キーを返す（端点が 2 個でなければ None）。"""
-    eps = conn.get("endpoint", []) or []
-    if len(eps) != 2:
-        return None
-    a = (eps[0].get("device-id"), eps[0].get("interface-id"))
-    b = (eps[1].get("device-id"), eps[1].get("interface-id"))
-    return frozenset((a, b))
-
-
 def _norm_ip(addr: object) -> str | None:
     """IP アドレス文字列をホスト部に正規化する（解析不能なら None）。"""
     if not isinstance(addr, str):
@@ -303,78 +354,6 @@ def _iface_ip(dev: _YamlDict, interface_id: object) -> str | None:
         if iface.get("interface-id") == interface_id:
             return iface.get("ip-address")
     return None
-
-
-def _build_graph(model: TopologyModel) -> dict[str, set[str]]:
-    """physical-connection から無向グラフ（隣接リスト）を構築する。
-
-    ノードは全 device-id（孤立ノードも含む）。自己ループ・未定義デバイス参照・
-    端点数≠2 の接続は無視する（それぞれ別ルールが検出する）。
-    """
-    adj: dict[str, set[str]] = {
-        d["device-id"]: set() for d in model.devices if d.get("device-id")
-    }
-    for conn in model.connections:
-        eps = conn.get("endpoint", []) or []
-        if len(eps) != 2:
-            continue
-        a, b = eps[0].get("device-id"), eps[1].get("device-id")
-        if not a or not b or a == b or a not in adj or b not in adj:
-            continue
-        adj[a].add(b)
-        adj[b].add(a)
-    return adj
-
-
-def _pair_multiplicity(model: TopologyModel) -> dict[frozenset[str], int]:
-    """デバイス対ごとの物理接続本数を返す（並行リンク＝LAG の判定に使う）。"""
-    counts: dict[frozenset[str], int] = {}
-    for conn in model.connections:
-        eps = conn.get("endpoint", []) or []
-        if len(eps) != 2:
-            continue
-        a, b = eps[0].get("device-id"), eps[1].get("device-id")
-        if not a or not b or a == b:
-            continue
-        key = frozenset((a, b))
-        counts[key] = counts.get(key, 0) + 1
-    return counts
-
-
-def _articulation_and_bridges(
-    adj: dict[str, set[str]],
-) -> tuple[set[str], list[frozenset[str]]]:
-    """無向グラフの関節点（articulation point）と橋（bridge）を返す（Tarjan/DFS）。"""
-    disc: dict[str, int] = {}
-    low: dict[str, int] = {}
-    timer = [0]
-    aps: set[str] = set()
-    bridges: list[frozenset[str]] = []
-
-    def dfs(u: str, parent: str | None) -> None:
-        disc[u] = low[u] = timer[0]
-        timer[0] += 1
-        children = 0
-        for v in adj[u]:
-            if v == parent:
-                continue
-            if v not in disc:
-                children += 1
-                dfs(v, u)
-                low[u] = min(low[u], low[v])
-                if parent is not None and low[v] >= disc[u]:
-                    aps.add(u)
-                if low[v] > disc[u]:
-                    bridges.append(frozenset((u, v)))
-            else:
-                low[u] = min(low[u], disc[v])
-        if parent is None and children > 1:
-            aps.add(u)
-
-    for node in adj:
-        if node not in disc:
-            dfs(node, None)
-    return aps, bridges
 
 
 
@@ -493,7 +472,7 @@ def _check_duplicate_connection(model: TopologyModel) -> list[ValidationIssue]:
     """同一ノード・ポート対を結ぶ重複リンク（無向・ポート込み）を検出する。"""
     groups: dict[frozenset[tuple[str | None, str | None]], list[str]] = {}
     for conn in model.connections:
-        key = _edge_key(conn)
+        key = make_edge_key(conn)
         if key is None:
             continue
         groups.setdefault(key, []).append(_conn_target(conn))
@@ -509,50 +488,15 @@ def _check_duplicate_connection(model: TopologyModel) -> list[ValidationIssue]:
     ]
 
 
-@rule
-def _check_duplicate_loopback(model: TopologyModel) -> list[ValidationIssue]:
-    """複数デバイスで同一 loopback を検出する（IP を正規化して比較）。"""
-    groups: dict[str, list[str]] = {}
-    for dev in model.devices:
-        lb = dev.get("loopback")
-        if not lb:
-            continue
-        key = _norm_ip(lb) or str(lb)
-        groups.setdefault(key, []).append(dev.get("device-id", ""))
-    return [
-        ValidationIssue(
-            rule="duplicate-loopback",
-            severity="error",
-            message=f"loopback {key} が複数デバイスで重複しています。",
-            targets=devs,
-        )
-        for key, devs in groups.items()
-        if len(devs) > 1
-    ]
-
-
-@rule
-def _check_duplicate_asn(model: TopologyModel) -> list[ValidationIssue]:
-    """同一 ASN を複数デバイスが共有している状態を検出する（info）。"""
-    groups: dict[Any, list[str]] = {}
-    for dev in model.devices:
-        asn = dev.get("asn")
-        if asn is None:
-            continue
-        groups.setdefault(asn, []).append(dev.get("device-id", ""))
-    return [
-        ValidationIssue(
-            rule="duplicate-asn",
-            severity="info",
-            message=(
-                f"ASN {asn} を {len(devs)} 台が共有しています"
-                "（iBGP なら正常・eBGP では要確認）。"
-            ),
-            targets=devs,
-        )
-        for asn, devs in groups.items()
-        if len(devs) > 1
-    ]
+_RULES.append(DuplicateDeviceFieldRule(
+    "duplicate-loopback", "loopback", "error",
+    "loopback {key} が複数デバイスで重複しています。",
+    normalize=lambda lb: _norm_ip(lb) or str(lb),
+))
+_RULES.append(DuplicateDeviceFieldRule(
+    "duplicate-asn", "asn", "info",
+    "ASN {key} を {count} 台が共有しています（iBGP なら正常・eBGP では要確認）。",
+))
 
 
 @rule
@@ -683,7 +627,7 @@ def _check_p2p_mask_mismatch(model: TopologyModel) -> list[ValidationIssue]:
 @rule
 def _check_isolated_device(model: TopologyModel) -> list[ValidationIssue]:
     """どの physical-connection にも現れない孤立ノード（次数 0）を検出する。"""
-    adj = _build_graph(model)
+    adj = build_graph(model)
     return [
         ValidationIssue(
             rule="isolated-device",
@@ -698,8 +642,8 @@ def _check_isolated_device(model: TopologyModel) -> list[ValidationIssue]:
 @rule
 def _check_spof_device(model: TopologyModel) -> list[ValidationIssue]:
     """単一障害点になり得る関節点（cut vertex）を検出する。"""
-    adj = _build_graph(model)
-    aps, _ = _articulation_and_bridges(adj)
+    adj = build_graph(model)
+    aps, _ = articulation_and_bridges(adj)
     return [
         ValidationIssue(
             rule="spof-device",
@@ -714,9 +658,9 @@ def _check_spof_device(model: TopologyModel) -> list[ValidationIssue]:
 @rule
 def _check_spof_bridge_link(model: TopologyModel) -> list[ValidationIssue]:
     """切断すると分断される橋（bridge edge）を検出する（並行リンクは除外）。"""
-    adj = _build_graph(model)
-    _, bridges = _articulation_and_bridges(adj)
-    mult = _pair_multiplicity(model)
+    adj = build_graph(model)
+    _, bridges = articulation_and_bridges(adj)
+    mult = pair_multiplicity(model)
     issues: list[ValidationIssue] = []
     for edge in bridges:
         if mult.get(edge, 0) > 1:  # 並行リンク（LAG）は冗長のため橋ではない
@@ -766,8 +710,8 @@ def _reachable_from(
 
 def _real_bridge_nodes(model: TopologyModel, adj: dict[str, set[str]]) -> set[str]:
     """並行リンク（LAG）を除いた橋に接するノード集合を返す。"""
-    _, bridges = _articulation_and_bridges(adj)
-    mult = _pair_multiplicity(model)
+    _, bridges = articulation_and_bridges(adj)
+    mult = pair_multiplicity(model)
     nodes: set[str] = set()
     for edge in bridges:
         if mult.get(edge, 0) > 1:
@@ -785,7 +729,7 @@ def _check_zone_transit(
     if not src or not dst:
         return []
     via = _select_nodes(model, policy.via)
-    adj = _build_graph(model)
+    adj = build_graph(model)
     reachable = _reachable_from(adj, src, blocked=via)
     # via を経由せず到達できた dst（src 自身・via 自身は除く）が違反
     leaked = sorted((reachable & dst) - src - via)
@@ -810,8 +754,8 @@ def _check_zone_redundancy(
     matched = _select_nodes(model, policy.selector)
     if not matched:
         return []
-    adj = _build_graph(model)
-    aps, _ = _articulation_and_bridges(adj)
+    adj = build_graph(model)
+    aps, _ = articulation_and_bridges(adj)
     non_redundant = aps | _real_bridge_nodes(model, adj)
     violating = sorted(matched & non_redundant)
     if not violating:

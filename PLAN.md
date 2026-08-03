@@ -1876,3 +1876,191 @@ uv run python main.py report -i examples/sample_topology_large.yaml --sections d
 ### R1: 詳細セクション — [x] IF/接続/LAG/VLAN/サブネット（Phase 1）
 ### R2: マトリクス — [x] ゾーン間接続マトリクス（Phase 2）
 ### R3: Web 統合 — [x] GUI から閲覧・ダウンロード（Phase 3・任意）
+
+<br><br><br>
+
+---
+
+<br><br><br>
+
+# リファクタリング計画
+
+## 目的
+
+現行コードを「分かりやすく、改造しやすい」状態へ段階的に整備する。
+各フェーズ完了後に `uv run python -m pytest tests/ -q` で全テスト通過を確認してから次に進む。
+
+---
+
+## 現状の問題点サマリ
+
+| モジュール | 行数 | 主な問題 |
+|---|---|---|
+| `partitioner.py` | 1024 | 3つの図生成モードが1ファイルに混在、大型関数（100行超）、テキスト生成の重複 |
+| `validator.py` | 993 | 同パターンの `@rule` が20個以上、detect/explain混在、グローバル `_RULES` リスト |
+| `web/app.py` | 692 | 30以上のエンドポイント直書き、async不完全、グローバル状態 `_DIFF_IMAGES = {}` |
+| `diff.py` | 716 | エッジキー正規化ロジックが散在、DOT文字列生成が50行超の単一関数 |
+| `renderer.py` | 479 | 15個の小型関数が散在、チェーン呼び出しが呼び出し元に丸投げ |
+| `icons.py` | 447 | `inject_icons_into_dot()` が50行超の正規表現+文字列操作、SVGロジック分散 |
+| `pipeline.py` | 345 | 改善ループが160行超、制御フローと判定ロジックが混在 |
+
+依存関係の特徴:
+- `web/app.py` が最もハブ化（8モジュール以上を直接利用）
+- `parser.py`, `icons.py`, `errors.py` が基底層（他に依存しない）
+- 循環依存なし ✓
+
+---
+
+## Phase 0 — 準備・低リスク整備
+
+**目的**: テストが通ることを確認しながら、後の大きな変更の土台を作る。
+
+- [x] 0-1: 主要モジュールへの型ヒント追加（`Any`・生 `dict` を具体的な型に）
+  - 対象: `parser.py`, `validator.py`, `partitioner.py`
+- [x] 0-2: `web/app.py` のグローバル変数 `_DIFF_IMAGES = {}` を `web/jobs.py` の `JobStore` に移動
+- [x] 0-3: `errors.py` の例外クラスに missing な `__init__` 引数を整理
+
+**完了の定義**: `uv run python -m pytest tests/ -q` が全通過する。
+
+---
+
+## Phase 1 — `renderer.py` のパイプラインクラス化
+
+**目的**: 変更影響が局所的で、テストしやすい小モジュールから始める。
+
+**現状**:
+```python
+# 呼び出し元が15個の関数を順番に手動チェーン
+dot = inject_imagepath(dot, ...)
+dot = inject_icons(dot, ...)
+dot = remove_edge_arrows(dot)
+```
+
+**変更後**:
+```python
+class RenderPipeline:
+    def __init__(self): self._steps: list[Callable[[str], str]] = []
+    def add(self, fn): self._steps.append(fn); return self
+    def run(self, dot: str) -> str: ...
+```
+
+- [x] 1-1: `RenderPipeline` クラスを `renderer.py` に追加
+- [x] 1-2: `render()` 内の手動チェーンを `RenderPipeline` に置換
+- [x] 1-3: 既存テスト通過確認
+
+**完了の定義**: `renderer.py` の `render()` が `RenderPipeline` を使い、外部インターフェースが変わらない。
+
+---
+
+## Phase 2 — `validator.py` のルールクラス化
+
+**目的**: 同パターンの繰り返しをデータ駆動に変え、コード量を大幅に削減する。
+
+**現状**:
+```python
+@rule
+def _check_duplicate_device_id(model): ...
+@rule
+def _check_duplicate_loopback(model): ...
+@rule
+def _check_duplicate_asn(model): ...  # 同パターンが20個以上
+```
+
+**変更後**:
+```python
+class ValidationRule(ABC):
+    @abstractmethod
+    def check(self, model: TopologyModel) -> list[ValidationIssue]: ...
+
+class DuplicateFieldRule(ValidationRule):
+    def __init__(self, field: str, target: str, severity: str): ...
+    def check(self, model) -> list[ValidationIssue]: ...
+
+# 登録
+_RULES = [
+    DuplicateFieldRule("device-id", "devices", "error"),
+    DuplicateFieldRule("loopback",  "devices", "warning"),
+    ...
+]
+```
+
+- [x] 2-1: `ValidationRule` 抽象基底クラスを追加
+- [x] 2-2: 同パターンの `@rule` 関数を `DuplicateFieldRule` 等に置換
+- [x] 2-3: `explain()` を `validator.py` 内の独立した関数として整理（LLM呼び出しを検出ロジックから分離）
+- [x] 2-4: グラフ解析ヘルパ（`_build_graph`, `_articulation_and_bridges` 等）を `_graph_utils` として内部モジュール化
+
+**完了の定義**: `validator.py` が 600行以下になり、既存テストが全通過する。
+
+---
+
+## Phase 3 — `diff.py` の比較ロジック整理
+
+**目的**: エッジキー正規化の散在を解消し、各エンティティの比較を独立した単位に分ける。
+
+- [x] 3-1: `EdgeKey` 値オブジェクトを追加（正規化ロジックを1か所に集約）
+- [x] 3-2: `compare()` の中のネストされたループを `_compare_nodes()`, `_compare_edges()`, `_compare_zones()` に分割
+- [x] 3-3: DOT文字列生成部分を `_build_diff_dot()` として `compare()` から分離
+- [x] 3-4: 既存テスト通過確認
+
+**完了の定義**: `compare()` が50行以下になり、既存テストが全通過する。
+
+---
+
+## Phase 4 — `partitioner.py` の責務分割（最大変更）
+
+**目的**: 3つの図生成モードを独立したクラスに分離し、1000行超のファイルを解消する。
+
+**変更後のファイル構成**:
+```
+src/d2v/partitioner/
+    __init__.py       # 既存の公開インターフェース（plan, zone_plan, focus_plan）を維持
+    _overview.py      # OverviewDiagramBuilder（俯瞰図）
+    _zone_detail.py   # ZoneDetailDiagramBuilder（ゾーン詳細図）
+    _focus.py         # FocusDiagramBuilder（フォーカス図）
+    _dot_builder.py   # 共通テキスト生成ヘルパ
+```
+
+- [ ] 4-1: 共通ヘルパ関数を `_dot_builder.py` に抽出
+- [ ] 4-2: `OverviewDiagramBuilder` を `_overview.py` に分離
+- [ ] 4-3: `ZoneDetailDiagramBuilder` を `_zone_detail.py` に分離
+- [ ] 4-4: `FocusDiagramBuilder` を `_focus.py` に分離
+- [ ] 4-5: `__init__.py` で `plan()`, `zone_plan()`, `focus_plan()` の公開インターフェースを維持
+
+**完了の定義**: 個別ファイルが各300行以下になり、既存テストが全通過する。
+
+---
+
+## Phase 5 — `web/app.py` の薄いルータ化
+
+**目的**: エンドポイント関数をハンドラクラスに委譲し、グローバル状態を解消する。
+
+- [ ] 5-1: `ValidateHandler`, `DiffHandler` クラスを `web/service.py` 内に追加
+- [ ] 5-2: `app.py` のエンドポイント関数を薄いルータ（ハンドラ呼び出しのみ）に簡素化
+- [ ] 5-3: グローバル `_DIFF_IMAGES = {}` をインスタンス変数に移動
+- [ ] 5-4: 既存テスト通過確認
+
+**完了の定義**: `app.py` の各エンドポイント関数が20行以下になり、既存テストが全通過する。
+
+---
+
+## フェーズ実施順序
+
+```
+Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
+  整備      小変更    即効性     中規模     大規模     アーキ
+```
+
+各フェーズは独立しているため、優先度に応じて順序を変更してよい。
+Phase 4 は他のフェーズが完了してから着手することを推奨（影響範囲が大きいため）。
+
+---
+
+## 進捗ログ（リファクタリング）
+
+| 日付 | 内容 |
+|------|------|
+| 2026-08-03 | リファクタリング計画策定 |
+| 2026-08-03 | Phase 0 完了。`partitioner.py` の `_YamlDict` 型を `dict[str, Any]` に修正。`RenderError` を `renderer.py` から `errors.py` へ移動（`dot_path` 属性付き `__init__` 整理）。`_DIFF_IMAGES` グローバルを `JobRegistry.store_diff_image()`/`get_diff_image()` に移動 |
+| 2026-08-03 | Phase 1 完了。`renderer.py` に `RenderPipeline` クラスを追加。`render()` と `render_legend()` の手動チェーンを `RenderPipeline` に置換。外部インターフェース不変 |
+| 2026-08-03 | Phase 2 完了。`_graph_utils.py` を新規作成（`build_graph`, `pair_multiplicity`, `articulation_and_bridges` を移動）。`validator.py` に `ValidationRule` ABC と `DuplicateDeviceFieldRule` を追加。`_check_duplicate_loopback`/`_check_duplicate_asn` の `@rule` 関数を `DuplicateDeviceFieldRule` インスタンスに置換。`diff.py` の `validator._build_graph` 参照も `_graph_utils` 経由に変更 |
+| 2026-08-03 | Phase 3 完了。`_graph_utils.py` に `EdgeKey` 型エイリアスと `make_edge_key()` を追加。`validator.py` の `_edge_key()` と `diff.py` の `_edge_identity()`（同一実装の重複）を削除し、`make_edge_key()` に統一。`compare()` を `_compare_nodes()`, `_compare_edges()`, `_compare_zones()`, `_compare_subnets()` の4サブ関数に分割。`compare()` 本体が12行に短縮。230テスト全通過 |

@@ -225,9 +225,6 @@ def validate_topology(req: ValidateRequest) -> dict:
 # 意味的 diff API
 # ---------------------------------------------------------------------------
 
-# 生成した差分図を token で引けるようにする（プロセス内・ローカルツール想定）
-_DIFF_IMAGES: dict[str, Path] = {}
-
 
 class DiffSide(BaseModel):
     """diff の一方（変更前 / 変更後）の入力。"""
@@ -284,7 +281,7 @@ def diff_topologies(req: DiffRequest) -> dict:
                 before_model, after_model, topo_diff, out_dir,
                 stem="diff", fmt=req.format,
             )
-            _DIFF_IMAGES[image_token] = img
+            jobs.registry.store_diff_image(image_token, img)
         except Exception:  # noqa: BLE001 - 図が作れなくても差分は返す
             image_token = None
 
@@ -300,7 +297,7 @@ def diff_topologies(req: DiffRequest) -> dict:
 @app.get("/api/diff/image/{token}")
 def get_diff_image(token: str):
     """diff で生成した差分図を token で返す。"""
-    path = _DIFF_IMAGES.get(token)
+    path = jobs.registry.get_diff_image(token)
     if path is None or not path.exists():
         raise HTTPException(404, "差分図が見つかりません。")
     return FileResponse(path)

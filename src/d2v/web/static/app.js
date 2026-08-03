@@ -80,6 +80,12 @@ async function loadMeta() {
   } catch (err) {
     badge.textContent = "provider: 取得失敗";
     console.error("メタ情報の取得に失敗しました:", err);
+    for (const id of ["example-select", "val-example-select", "diff-before-example", "diff-after-example", "rpt-example-select"]) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.disabled = true;
+      el.innerHTML = "<option>サーバーに接続できません（再読み込みしてください）</option>";
+    }
   }
 }
 

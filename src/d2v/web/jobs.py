@@ -171,6 +171,15 @@ class JobRegistry:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._diff_images: dict[str, Path] = {}
+
+    def store_diff_image(self, token: str, path: Path) -> None:
+        """差分図のパスを token に紐付けて保存する。"""
+        self._diff_images[token] = path
+
+    def get_diff_image(self, token: str) -> Path | None:
+        """token に対応する差分図のパスを返す（未登録なら None）。"""
+        return self._diff_images.get(token)
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:

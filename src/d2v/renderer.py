@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 from pathlib import Path
+from typing import Callable
 
 import graphviz
 
 from d2v import icons
 from d2v.config import settings
-from d2v.errors import GraphvizNotFoundError
-
-
-class RenderError(Exception):
-    """DOT コードのレンダリングに失敗したことを示す回復可能な例外。
-
-    DOT の構文エラーなど、LLM の再生成で修正しうる失敗を表す。
-    保存済みの .dot ファイルパスと Graphviz からのエラーメッセージを保持する。
-    """
-
-    def __init__(self, message: str, dot_path: Path):
-        super().__init__(message)
-        self.dot_path = dot_path
+from d2v.errors import GraphvizNotFoundError, RenderError
 
 
 # bgcolor="#RRGGBB" / bgcolor="#RRGGBBAA" にマッチする正規表現
@@ -40,6 +30,24 @@ _CLUSTER_FILLED_RE = re.compile(r'style\s*=\s*"?filled"?\s*;', re.IGNORECASE)
 
 # グラフ宣言の開き波括弧（例: `digraph G {`）にマッチする正規表現
 _GRAPH_OPEN_RE = re.compile(r"(strict\s+)?(di)?graph\b[^{]*\{", re.IGNORECASE)
+
+
+class RenderPipeline:
+    """DOT 変換ステップを蓄積し、順次適用するパイプライン。"""
+
+    def __init__(self) -> None:
+        self._steps: list[Callable[[str], str]] = []
+
+    def add(self, step: Callable[[str], str]) -> "RenderPipeline":
+        """変換ステップを末尾に追加して self を返す（メソッドチェーン用）。"""
+        self._steps.append(step)
+        return self
+
+    def run(self, dot_code: str) -> str:
+        """登録した全ステップを順番に適用して最終 DOT コードを返す。"""
+        for step in self._steps:
+            dot_code = step(dot_code)
+        return dot_code
 
 
 def inject_imagepath(dot_code: str) -> str:
@@ -371,23 +379,24 @@ def render(
     """
     # 凡例掲載対象の種別は、アイコン注入で d2vtype が消える前に把握しておく
     types = legend_types(dot_code) if show_legend else []
-    # cluster の style="filled" を除去して淡い bgcolor を優先させてから透過を付与する
-    dot_code = neutralize_cluster_fill(dot_code)
-    dot_code = remove_edge_arrows(dot_code)
-    dot_code = apply_zone_opacity(dot_code, zone_opacity)
-    # ノードの縁取りを強めてフラットな箱に立体感を与える
-    dot_code = emphasize_node_borders(dot_code)
-    # LLM 生成 DOT の d2vtype 属性付きノードへアイコンを注入し、探索先を設定する
-    dot_code = icons.inject_icons_into_dot(dot_code)
-    dot_code = inject_imagepath(dot_code)
-    # PNG ラスタ出力の解像度を上げ、外周に余白を足して視認性を高める
-    dot_code = inject_render_quality(
-        dot_code,
-        dpi=settings.diagram_dpi if fmt == "png" else 0,
-        pad=0.4,
+
+    dot_code = (
+        RenderPipeline()
+        .add(neutralize_cluster_fill)
+        .add(remove_edge_arrows)
+        .add(functools.partial(apply_zone_opacity, opacity=zone_opacity))
+        .add(emphasize_node_borders)
+        .add(icons.inject_icons_into_dot)
+        .add(inject_imagepath)
+        .add(functools.partial(
+            inject_render_quality,
+            dpi=settings.diagram_dpi if fmt == "png" else 0,
+            pad=0.4,
+        ))
+        .add(functools.partial(fit_aspect_ratio, target_wh=settings.diagram_aspect_ratio))
+        .run(dot_code)
     )
-    # 横長すぎる図は縦横比を目標（既定 4:3）に近づける
-    dot_code = fit_aspect_ratio(dot_code, settings.diagram_aspect_ratio)
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rendered_path = _rasterize(dot_code, output_dir, stem, fmt)
@@ -419,13 +428,16 @@ def render_legend(
     Returns:
         生成した凡例画像ファイルの Path。
     """
-    dot_code = build_legend_dot(types)
-    dot_code = icons.inject_icons_into_dot(dot_code)
-    dot_code = inject_imagepath(dot_code)
-    dot_code = inject_render_quality(
-        dot_code,
-        dpi=settings.diagram_dpi if fmt == "png" else 0,
-        pad=0.2,
+    dot_code = (
+        RenderPipeline()
+        .add(icons.inject_icons_into_dot)
+        .add(inject_imagepath)
+        .add(functools.partial(
+            inject_render_quality,
+            dpi=settings.diagram_dpi if fmt == "png" else 0,
+            pad=0.2,
+        ))
+        .run(build_legend_dot(types))
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     return _rasterize(dot_code, output_dir, stem, fmt)

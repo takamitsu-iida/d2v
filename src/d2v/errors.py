@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 class D2VError(Exception):
     """d2v の基底例外。すべてのユーザー向けエラーはこれを継承する。"""
@@ -34,6 +36,14 @@ class LLMRequestError(D2VError):
 
 class GraphvizNotFoundError(D2VError):
     """Graphviz 実行ファイルが見つからない（環境起因の回復不能エラー）。"""
+
+
+class RenderError(D2VError):
+    """DOT コードのレンダリング失敗（構文エラー等、LLM 再生成で回復しうる）。"""
+
+    def __init__(self, message: str, dot_path: Path) -> None:
+        super().__init__(message)
+        self.dot_path = dot_path
 
 
 class RenderFailedError(D2VError):
