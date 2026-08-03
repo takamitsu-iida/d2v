@@ -150,14 +150,14 @@ AuditReport
 
 ## 実装フェーズと進捗
 
-### Phase 1 — データモデル定義
+### Phase 1 — データモデル定義 ✅
 **ファイル**: `src/d2v/audit/schema.py`
 
-- [ ] `ExtractedInterface` モデル
-- [ ] `ExtractedBgpPeer` モデル
-- [ ] `ExtractedConfig` モデル
-- [ ] `AuditIssue` モデル
-- [ ] `AuditReport` モデル（`from_issues()` クラスメソッド含む）
+- [x] `ExtractedInterface` モデル
+- [x] `ExtractedBgpPeer` モデル
+- [x] `ExtractedConfig` モデル
+- [x] `AuditIssue` モデル
+- [x] `AuditReport` モデル（`from_issues()` クラスメソッド含む）
 
 ### Phase 2 — LLM 抽出器
 **ファイル**: `src/d2v/audit/extractor.py`, `prompts/config-extract.md`
