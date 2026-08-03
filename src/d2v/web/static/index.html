@@ -29,6 +29,7 @@
     <button class="tab" data-tab="v2d" role="tab">v2d: 画像 → YAML</button>
     <button class="tab" data-tab="validate" role="tab">検証: design lint</button>
     <button class="tab" data-tab="diff" role="tab">diff: 差分</button>
+    <button class="tab" data-tab="report" role="tab">設計書</button>
   </nav>
 
   <main>
@@ -325,6 +326,52 @@
           <p class="placeholder" id="diff-idle">変更前・変更後を選び、「差分を比較」を押してください。</p>
         </div>
       </div>
+    </section>
+
+    <!-- ============ report タブ ============ -->
+    <section class="panel" id="panel-report" role="tabpanel" hidden>
+    <div class="layout">
+      <!-- 左: 入力 -->
+      <div class="col-form">
+        <form id="report-form">
+          <fieldset>
+            <legend>対象トポロジ</legend>
+            <div class="radio-row">
+              <label><input type="radio" name="rpt-source" value="example" checked /> サンプル</label>
+              <label><input type="radio" name="rpt-source" value="text" /> 貼り付け</label>
+            </div>
+            <div class="rpt-src-block" data-src="example">
+              <select id="rpt-example-select"></select>
+            </div>
+            <div class="rpt-src-block" data-src="text" hidden>
+              <textarea id="rpt-yaml-text" rows="12" placeholder="iida-network-model YAML を貼り付け"></textarea>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>オプション</legend>
+            <label class="row"><span>フォーマット</span>
+              <select id="rpt-format">
+                <option value="markdown">Markdown</option>
+                <option value="json">JSON</option>
+              </select>
+            </label>
+          </fieldset>
+          <button type="submit" id="rpt-run-btn" class="primary">▶ 設計書を生成</button>
+        </form>
+      </div>
+
+      <!-- 右: 結果 -->
+      <div class="col-result">
+        <div id="rpt-result-wrap" hidden>
+          <div class="result-toolbar">
+            <h3 id="rpt-title">設計書</h3>
+            <a id="rpt-download" class="link-btn" href="#" download>ダウンロード</a>
+          </div>
+          <pre id="rpt-content" class="report-pre"></pre>
+        </div>
+        <p class="placeholder" id="rpt-idle">対象を選び、「設計書を生成」を押してください。</p>
+      </div>
+    </div>
     </section>
   </main>
 

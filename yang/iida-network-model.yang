@@ -11,7 +11,7 @@ module iida-network-model {
   }
 
   organization "IIDA Inc.";
-  contact "support@iida.com";
+  contact "takamitsu iida";
   description
     "A concise YANG model for representing network topology across physical, Layer 2, and Layer 3.";
   revision "2026-07-17" {
@@ -37,38 +37,6 @@ module iida-network-model {
   revision "2023-11-20" {
     description "Initial version, inspired by OpenConfig-like structure.";
   }
-
-  // ===========================================================================
-  // 改善計画 (Improvement Plan) — 進捗管理用
-  // ---------------------------------------------------------------------------
-  // 企業向けネットワークの「構成定義」と「運用管理」を充足させるための
-  // 優先度★★★の追加項目。着手時にステータスを更新すること。
-  //   [ ] TODO   /  [~] IN-PROGRESS  /  [x] DONE
-  //
-  // -- 構成定義 (Design) --
-  //   [x] IPv6 対応
-  //         inet:ipv4-* を inet:ip-address / inet:ip-prefix へ一般化し、
-  //         prefix-length を 0..128 へ拡張。デュアルスタックを表現可能にした。
-  //   [x] 冗長化 (Redundancy)
-  //         ゲートウェイ冗長 (VRRP/HSRP/GLBP) を layer3-layer/first-hop-redundancy、
-  //         リンク集約 (LAG/LACP, MLAG) を layer2-layer/link-aggregation として追加した。
-  //   [x] ダイナミックルーティング (Dynamic Routing)
-  //         layer3-layer に routing-config (BGP neighbor/peer-group/address-family,
-  //         OSPF area, redistribution) と再利用可能な route-policy を追加した。
-  //
-  // -- 運用管理 (Operations) --
-  //   [x] 管理系設定 (Management)
-  //         network-model/management を新設。管理 VLAN、デバイス別の管理IP/ゲートウェイ、
-  //         In-band 管理IF、管理用ループバック、Out-of-Band 管理を追加した。
-  //   [ ] 監視・テレメトリ (Monitoring / Telemetry)
-  //         SNMP (community/v3)、Syslog 宛先、NetFlow/sFlow、
-  //         ストリーミングテレメトリ。
-  //   [ ] AAA / アクセス管理
-  //         TACACS+/RADIUS サーバ、ローカルユーザ、権限レベル。
-  //   [ ] 運用状態 (Operational State / state data)
-  //         admin-status / oper-status など config false データ。
-  //         現状は明示的に割愛しているため運用管理向けに追加する。
-  // ===========================================================================
 
   // ===========================================================================
   // Top-level container for the entire network configuration
@@ -139,9 +107,60 @@ module iida-network-model {
           type string;
           description "Operating System version of the device.";
         }
-        leaf location {
-          type string;
-          description "Physical location of the device (e.g., 'Rack-A01', 'Building X, Room Y').";
+        leaf serial-number {
+          type string {
+            length "1..64";
+          }
+          description "Hardware serial number of the device for asset management.";
+        }
+        leaf role {
+          type enumeration {
+            enum "spine";
+            enum "leaf";
+            enum "core";
+            enum "distribution";
+            enum "access";
+            enum "border";
+            enum "oob";        // out-of-band management device
+            enum "other";
+          }
+          description "Operational role of the device within the network fabric.";
+        }
+        container location {
+          description "Structured physical location of the device.";
+          leaf site-id {
+            type string { length "1..64"; }
+            description "Site or campus identifier.";
+          }
+          leaf building {
+            type string { length "1..64"; }
+            description "Building name or code within the site.";
+          }
+          leaf room {
+            type string { length "1..64"; }
+            description "Room or floor designation within the building.";
+          }
+          leaf rack-id {
+            type string { length "1..64"; }
+            description "Rack identifier (e.g., 'Rack-A01').";
+          }
+          leaf rack-unit {
+            type uint8 { range "1..52"; }
+            units "U";
+            description "Rack unit (U) position of the device (top of device).";
+          }
+        }
+        leaf hw-revision {
+          type string { length "1..32"; }
+          description "Hardware revision identifier for distinguishing variants of the same model.";
+        }
+        leaf install-date {
+          type yang:date-and-time;
+          description "Date when the device was installed.";
+        }
+        leaf end-of-life-date {
+          type yang:date-and-time;
+          description "Vendor end-of-life date for lifecycle management.";
         }
         leaf asn {
           type uint32;

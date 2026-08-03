@@ -7,11 +7,13 @@ YANGモデル（`iida-network-model`）に準拠したネットワークトポ�
 逆方向の **v2d（vision-to-diagram）** も同梱しており、構成図の**画像**から YANGモデル
 （`iida-network-model`）に準拠したYAMLファイルを生成できます（[v2d のセクション](#v2d--画像からトポロジ-yaml-を生成vision-to-diagram)を参照）。
 
-さらに、AI 支援でネットワーク設計を進めるための 2 つのツールを同梱しています。
+さらに、AI 支援でネットワーク設計を進めるための 3 つのツールを同梱しています。
 
 - **validate（セマンティック検証 / design lint）**: スキーマ検証を超えて、宙ぶらりんリンク・重複・IP 整合・単一障害点（SPOF）・冗長性・ゾーンポリシーなど**設計そのものの妥当性**を検査します（[validate のセクション](#validate--セマンティック検証design-lint)）。
 
 - **diff（意味的 diff ＋ 差分図）**: 2 つのトポロジ YAML の**構造差分**を検出し、追加/削除/変更を色分けした差分図を生成します。機器/リンク障害時の到達不能範囲（blast radius）も算出できます（[diff のセクション](#diff--トポロジの意味的-diff--差分図)）。
+
+- **report（設計書生成）**: トポロジ YAML から**Markdown / JSON 形式の設計書**を生成します。ネットワーク概要・ゾーン構成・デバイス台帳・IF 一覧・物理接続・LAG/VLAN/サブネット・ゾーン間接続マトリクスを一括出力します（[report のセクション](#report--設計書生成)）。
 
 これらの検出・算出はすべて**決定論的（LLM 非依存・追加依存なし）**で、LLM は理由付けや要約の補助にのみ使います。
 
@@ -736,10 +738,56 @@ python main.py diff -b before.yaml -a after.yaml --json --no-image
 
 <br><br><br>
 
+## report — 設計書生成
+
+トポロジ YAML から**設計書**（Markdown / JSON）を生成します。
+LLM 不要・追加依存なしで決定論的に動作するため、API キーなしで即時に実行できます。
+
+```bash
+# Markdown で標準出力に出力
+python main.py report -i examples/sample_topology_small.yaml
+
+# JSON 形式で出力
+python main.py report -i examples/sample_topology_large.yaml --format json
+
+# セクションを絞って出力（複数指定可）
+python main.py report -i examples/sample_topology_medium.yaml \
+  --sections overview zones zone_matrix
+
+# ファイルに保存
+python main.py report -i examples/sample_topology_large.yaml -o design.md
+```
+
+```
+オプション（report サブコマンド）:
+  -i, --input TOPOLOGY_YAML     対象のトポロジ YAML（必須）
+  -o, --output OUTPUT_FILE      出力先ファイル（省略時は標準出力）
+  --format {markdown,json}      出力フォーマット（デフォルト: markdown）
+  --sections SECTION [...]      出力するセクションを限定
+```
+
+**生成されるセクション**
+
+| セクション ID | 内容 |
+|---------------|------|
+| `overview` | ネットワーク概要（ゾーン数・デバイス数・接続数・サブネット数） |
+| `zones` | ゾーン一覧（ゾーン名・所属デバイス数・デバイス ID） |
+| `devices` | デバイス台帳（デバイス ID・タイプ・ゾーン・ループバック IP） |
+| `interfaces` | インタフェース一覧（device・IF ID・IP アドレス） |
+| `connections` | 物理接続一覧（接続 ID・両端 device/IF・IP アドレス） |
+| `lags` | LAG 一覧（LAG ID・メンバーIF・接続先） |
+| `vlans` | VLAN 一覧（VLAN ID・名前・メンバーIF） |
+| `subnets` | サブネット一覧（サブネット名・CIDR・所属 device/IF） |
+| `zone_matrix` | ゾーン間接続マトリクス（各ゾーンペアの物理接続数） |
+
+`--sections` で必要な部分だけを抽出できるため、大規模トポロジでも特定の情報を素早く確認できます。
+
+<br><br><br>
+
 ## ブラウザ GUI（Web UI）
 
 CLI に加えて、ブラウザ上でパラメータを指定し結果を確認できる Web GUI を同梱しています。
-d2v（YAML → 図）・v2d（画像 → YAML）・validate（検証）・diff（差分）のいずれも GUI から
+d2v（YAML → 図）・v2d（画像 → YAML）・validate（検証）・diff（差分）・report（設計書）のいずれも GUI から
 実行できます。CLI は従来どおり利用できます（GUI はもう 1 つのフロントエンドとして追加されたものです）。
 
 <br>
@@ -765,6 +813,8 @@ python main.py serve --reload
 
 起動後、ブラウザで `http://127.0.0.1:8000` を開きます。
 
+VSCodeで表示する場合は 「表示→ブラウザー」 です。
+
 ```
 オプション（serve サブコマンド）:
   --host HOST     バインドするホスト（デフォルト: 127.0.0.1）
@@ -788,6 +838,8 @@ python main.py serve --reload
   重大度別に色分けした issue 一覧（ルール/内容/対象）を表示。`strict` と `--explain`（理由・修正案）に対応。
 - **diff タブ**: 変更前 / 変更後の YAML（サンプルまたは貼り付け）を比較し、構造差分（追加/削除/変更）と
   色分けした**差分図**を表示。`--summarize` で自然言語要約も得られます。
+- **設計書タブ（report）**: サンプル選択 / YAML 貼り付けから設計書（Markdown / JSON）を即時生成し、
+  プレビュー表示とダウンロードができます。LLM 不要で即時に完結します。
 - **履歴ドロワー**: 当該セッションのジョブをサムネイル付きで一覧し、クリックで結果を再表示。
 - **v2d → d2v 連携**: v2d の抽出 YAML をワンクリックで d2v タブへ流し込み、そのまま作図。
 - **共有リンク**: 現在の d2v パラメータを URL クエリにコピー。開き直すとフォームへ復元されます。
@@ -820,6 +872,16 @@ python main.py serve --reload
 5. **YAML / 所見 / 精度 / 元画像・再描画** のタブで結果を確認し、YAML・サイドカー JSON を
    ダウンロードできます。「**この YAML で d2v 図を生成 →**」で d2v タブへ連携できます。
 
+**設計書（report）**
+
+1. ヘッダの「**設計書**」タブを開きます。
+2. 「対象トポロジ」で入力方法を選びます。
+   - **サンプル**: 同梱の `examples/*.yaml` から選択。
+   - **貼り付け**: テキストエリアに YAML を直接貼り付け。
+3. 「フォーマット」で **Markdown** または **JSON** を選びます。
+4. 「**▶ 設計書を生成**」を押すと、右側に設計書の内容が即時表示されます。
+5. 「ダウンロード」リンクでファイルとして保存できます（`.md` / `.json`）。
+
 <br>
 
 ### API（スクリプトから利用する場合）
@@ -834,6 +896,7 @@ GUI は下記の REST API 上に構築されています。SSE（`text/event-str
 | POST | `/api/v2d/jobs` | v2d ジョブ作成（multipart 画像）→ `job_id` |
 | POST | `/api/validate` | セマンティック検証（同期）→ issue 一覧 |
 | POST | `/api/diff` | 意味的 diff（同期）→ 構造差分＋差分図トークン |
+| POST | `/api/report` | 設計書生成（同期）→ Markdown / JSON |
 | GET | `/api/diff/image/{token}` | 差分図の画像 |
 | GET | `/api/jobs` | ジョブ一覧（履歴） |
 | GET | `/api/jobs/{id}` | ジョブ状態・結果メタ |
@@ -847,6 +910,12 @@ GUI は下記の REST API 上に構築されています。SSE（`text/event-str
 | GET | `/api/jobs/{id}/v2d/rerender` | d2v 再描画画像（v2d） |
 
 ```bash
+# 例: 設計書を Markdown で取得
+curl -s -X POST http://127.0.0.1:8000/api/report \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"example","example":"sample_topology_small.yaml","format":"markdown"}' \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["content"])'
+
 # 例: d2v ジョブを投げて job_id を得る
 curl -s -X POST http://127.0.0.1:8000/api/d2v/jobs \
   -H 'Content-Type: application/json' \
@@ -876,9 +945,8 @@ curl -s -X POST http://127.0.0.1:8000/api/v2d/jobs \
 ## エディタ連携 — フォーカスプレビュー（VS Code 拡張）
 
 規模の大きい YAML を編集していると全体像を見失いがちです。`editor/` に、
-**カーソル位置のノード（device）周辺の構成図をライブ表示**する VS Code 拡張を
-同梱しています。レンダリングは決定論経路（LLM 不使用）のため即時・無料で、
-編集のたびに再描画されます。
+**カーソル位置のノード（device）周辺の構成図をライブ表示**する VS Code 拡張を同梱しています。
+レンダリングは決定論経路（LLM 不使用）のため即時・無料で、編集のたびに再描画されます。
 
 - カーソルを動かすと、その device 周辺（N ホップ）の図が自動更新されます。
   `physical-connection` 内にカーソルを置くと両端 2 台が対象になります。
@@ -891,20 +959,23 @@ curl -s -X POST http://127.0.0.1:8000/api/v2d/jobs \
 まず、ターミナルを１枚開いてサーバを起動します。
 
 ```bash
-# 1. サーバを起動（別ターミナル）
+cd d2v
 python main.py serve
 ```
 
-別のターミナルを開いて拡張機能をビルドします。
+別のターミナルを開いて拡張機能をビルドします。この処理は一度だけで構いません。
 
 ```
-# 2. 拡張をビルド
 cd editor && npm install && npm run compile
 ```
 
-続いて、VS Code で `editor/` ディレクトリを開きます。
+続いて VSCode を新規に開いて `editor/` ディレクトリを開きます。
 
-F5（Run Extension）を押すと拡張機能が起動し、別のVS Codeのウィンドウが開きます。
+```
+code d2v/editor
+```
+
+F5（Run Extension）を押すと拡張機能が起動し、さらに別のVSCodeのウィンドウが開きます。
 
 そのウィンドウには **「d2v: フォーカスプレビューを開く」** というボタンが表示されています。
 YAMLファイルを開いてからボタンを押してください。

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python3
 """d2v: iida-network-model YAML → ネットワーク構成図（PNG / SVG）生成ツール。
 
 サブコマンド:
@@ -41,6 +41,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "diff":
         run_diff(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "report":
+        run_report(sys.argv[2:])
         return
     # ── [削除可能] 決定論的ジェネレータ（LLM 非依存）: src/d2v/detgen.py と
     #    この 4 行を消せば丸ごと撤去できる ─────────────────────────
@@ -678,6 +681,50 @@ def run_serve(argv: list[str]) -> None:
         port=args.port,
         reload=args.reload,
     )
+
+
+# ---------------------------------------------------------------------------
+# report サブコマンド（YAML → 設計書抽出）
+# ---------------------------------------------------------------------------
+
+
+def run_report(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="d2v report",
+        description="iida-network-model YAML から設計書（Markdown / JSON）を生成します。",
+    )
+    ap.add_argument("--input", "-i", required=True, type=Path, metavar="TOPOLOGY_YAML",
+                    help="入力トポロジ YAML")
+    ap.add_argument("--output", "-o", type=Path, default=None, metavar="FILE",
+                    help="出力先ファイル（省略時は標準出力）")
+    ap.add_argument("--format", "-f", choices=["markdown", "json"], default="markdown",
+                    help="出力フォーマット（デフォルト: markdown）")
+    ap.add_argument("--sections", nargs="+", metavar="SECTION",
+                    help="出力するセクションを限定（overview zones devices など）")
+    args = ap.parse_args(argv)
+
+    from d2v import docgen
+    from d2v.parser import load_model
+
+    try:
+        model = load_model(args.input)
+    except D2VError as e:
+        console.print(f"\n[bold red]✗ {e}[/bold red]\n")
+        sys.exit(1)
+
+    data = docgen.extract(model, title=args.input.stem)
+
+    if args.format == "json":
+        text = docgen.to_json(data)
+    else:
+        text = docgen.to_markdown(data, sections=args.sections)
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text, encoding="utf-8")
+        console.print(f"[bold green]✓ 設計書を出力しました:[/bold green] {args.output}")
+    else:
+        print(text)
 
 
 if __name__ == "__main__":

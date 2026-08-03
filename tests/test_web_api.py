@@ -522,3 +522,62 @@ def test_lint_maps_target_to_device_line():
 def test_lint_bad_yaml_returns_400():
     r = client.post("/api/lint", json={"source": "text", "yaml_text": "nope: true\n"})
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# /api/report
+# ---------------------------------------------------------------------------
+
+def test_report_example_returns_markdown():
+    r = client.post("/api/report", json={"source": "example", "example": "sample_topology_small.yaml", "format": "markdown"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["format"] == "markdown"
+    assert "# " in data["content"]
+    assert data["title"] == "sample_topology_small"
+
+
+def test_report_example_returns_json():
+    r = client.post("/api/report", json={"source": "example", "example": "sample_topology_small.yaml", "format": "json"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["format"] == "json"
+    import json as _json
+    obj = _json.loads(data["content"])
+    assert "overview" in obj
+
+
+def test_report_yaml_text():
+    text = (Path("examples") / "sample_topology_small.yaml").read_text(encoding="utf-8")
+    r = client.post("/api/report", json={"source": "text", "yaml_text": text, "format": "markdown"})
+    assert r.status_code == 200
+    assert "# " in r.json()["content"]
+
+
+def test_report_sections_filter():
+    r = client.post("/api/report", json={"source": "example", "example": "sample_topology_small.yaml", "format": "markdown", "sections": ["overview"]})
+    assert r.status_code == 200
+    content = r.json()["content"]
+    assert "概要" in content
+    # zones セクションの見出しが存在しないことを確認
+    assert "## ゾーン一覧" not in content
+
+
+def test_report_invalid_format_returns_400():
+    r = client.post("/api/report", json={"source": "example", "example": "sample_topology_small.yaml", "format": "html"})
+    assert r.status_code == 400
+
+
+def test_report_unknown_example_returns_400():
+    r = client.post("/api/report", json={"source": "example", "example": "nonexistent_file"})
+    assert r.status_code == 400
+
+
+def test_report_path_traversal_returns_400():
+    r = client.post("/api/report", json={"source": "example", "example": "../etc/passwd"})
+    assert r.status_code == 400
+
+
+def test_report_bad_yaml_text_returns_400():
+    r = client.post("/api/report", json={"source": "text", "yaml_text": "not: valid: yaml: schema"})
+    assert r.status_code == 400

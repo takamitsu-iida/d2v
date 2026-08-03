@@ -61,6 +61,17 @@ async function loadMeta() {
         dsel.appendChild(opt);
       }
     }
+    // report タブのサンプル一覧
+    const rsel = document.getElementById("rpt-example-select");
+    if (rsel) {
+      rsel.innerHTML = "";
+      for (const name of META.examples) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        rsel.appendChild(opt);
+      }
+    }
     // 既定値を反映
     const d = META.defaults;
     setVal("p-split-threshold", d.split_threshold);
@@ -1033,6 +1044,75 @@ function renderDiffError(msg) {
 }
 
 
+// ---------------------------------------------------------------------------
+// 設計書タブ
+// ---------------------------------------------------------------------------
+
+function initReport() {
+  document.querySelectorAll('input[name="rpt-source"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      const src = document.querySelector('input[name="rpt-source"]:checked').value;
+      document.querySelectorAll(".rpt-src-block").forEach((b) => {
+        b.hidden = b.dataset.src !== src;
+      });
+    })
+  );
+  document.getElementById("report-form").addEventListener("submit", submitReport);
+}
+
+async function submitReport(e) {
+  e.preventDefault();
+  const btn = document.getElementById("rpt-run-btn");
+  const source = document.querySelector('input[name="rpt-source"]:checked').value;
+  const format = document.getElementById("rpt-format").value;
+  const payload = { source, format };
+  if (source === "example") {
+    payload.example = document.getElementById("rpt-example-select").value;
+  } else {
+    payload.yaml_text = document.getElementById("rpt-yaml-text").value;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "生成中…";
+  try {
+    const res = await fetch("/api/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    renderReport(data);
+  } catch (err) {
+    document.getElementById("rpt-idle").hidden = false;
+    document.getElementById("rpt-result-wrap").hidden = true;
+    document.getElementById("rpt-idle").textContent = `エラー: ${escapeHtml(err.message)}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ 設計書を生成";
+  }
+}
+
+function renderReport(data) {
+  document.getElementById("rpt-idle").hidden = true;
+  document.getElementById("rpt-result-wrap").hidden = false;
+  document.getElementById("rpt-title").textContent = `設計書: ${data.title}`;
+
+  const pre = document.getElementById("rpt-content");
+  pre.textContent = data.content;
+
+  // ダウンロードリンクを Blob URL に設定
+  const ext = data.format === "json" ? "json" : "md";
+  const mime = data.format === "json" ? "application/json" : "text/markdown";
+  const blob = new Blob([data.content], { type: mime });
+  const dl = document.getElementById("rpt-download");
+  if (dl._blobUrl) URL.revokeObjectURL(dl._blobUrl);
+  dl._blobUrl = URL.createObjectURL(blob);
+  dl.href = dl._blobUrl;
+  dl.download = `${data.title}.${ext}`;
+}
+
+
 document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initSourceToggle();
@@ -1045,6 +1125,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initV2dToD2v();
   initValidate();
   initDiff();
+  initReport();
   loadMeta().then(applyQueryParams);
   document.getElementById("d2v-form").addEventListener("submit", submitJob);
   document.getElementById("preview-btn").addEventListener("click", previewInput);

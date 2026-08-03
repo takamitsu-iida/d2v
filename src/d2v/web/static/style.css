@@ -431,3 +431,18 @@ button.secondary {
 #diff-image { max-width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
 .ddtab { appearance: none; border: 1px solid var(--border); background: var(--panel); color: var(--muted); padding: 6px 14px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px; }
 .ddtab.active { background: var(--panel-2); color: var(--text); }
+
+/* ── report タブ ── */
+.report-pre {
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.result-toolbar { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.result-toolbar h3 { margin: 0; }

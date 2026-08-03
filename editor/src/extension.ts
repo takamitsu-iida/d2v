@@ -245,6 +245,37 @@ interface LintIssue {
   line: number | null;
 }
 
+/** 抑制情報の保存先（ワークスペース単位）。activate で設定する。 */
+let extensionContext: vscode.ExtensionContext | undefined;
+const SUPPRESS_STATE_KEY = "d2v.suppressedLints";
+
+/** diagnostic から元の LintIssue を引くための対応表（Quick Fix 用）。 */
+const diagnosticIssues = new WeakMap<vscode.Diagnostic, LintIssue>();
+
+/** uri → 表示中の波線（行と issue）。右クリックメニューの抑制で使う。 */
+const lintIndexByUri = new Map<string, { line: number; issue: LintIssue }[]>();
+
+/** rule と対象デバイスの組で抑制キーを作る（行番号に依存しない）。 */
+function suppressionKey(iss: Pick<LintIssue, "rule" | "targets">): string {
+  return `${iss.rule}|${[...iss.targets].sort().join(",")}`;
+}
+
+function getSuppressed(): Set<string> {
+  return new Set(
+    extensionContext?.workspaceState.get<string[]>(SUPPRESS_STATE_KEY, []) ?? []
+  );
+}
+
+async function addSuppressed(key: string): Promise<void> {
+  const s = getSuppressed();
+  s.add(key);
+  await extensionContext?.workspaceState.update(SUPPRESS_STATE_KEY, [...s]);
+}
+
+async function clearSuppressed(): Promise<void> {
+  await extensionContext?.workspaceState.update(SUPPRESS_STATE_KEY, []);
+}
+
 function severityOf(sev: string): vscode.DiagnosticSeverity {
   switch (sev) {
     case "error":
@@ -260,8 +291,14 @@ async function runLint(
   doc: vscode.TextDocument,
   collection: vscode.DiagnosticCollection
 ): Promise<void> {
+  if (!vscode.workspace.getConfiguration("d2v").get("lint.enable", true)) {
+    collection.delete(doc.uri);
+    lintIndexByUri.delete(doc.uri.toString());
+    return;
+  }
   if (!looksLikeTopology(doc)) {
     collection.delete(doc.uri);
+    lintIndexByUri.delete(doc.uri.toString());
     return;
   }
   let issues: LintIssue[];
@@ -282,20 +319,27 @@ async function runLint(
     return;
   }
 
-  const diagnostics: vscode.Diagnostic[] = issues.map((iss) => {
-    const lineIdx = Math.max(0, (iss.line ?? 1) - 1);
-    const safeLine = Math.min(lineIdx, Math.max(0, doc.lineCount - 1));
-    const range = doc.lineAt(safeLine).range;
-    const diag = new vscode.Diagnostic(
-      range,
-      `${iss.message}${iss.targets.length ? ` [${iss.targets.join(", ")}]` : ""}`,
-      severityOf(iss.severity)
-    );
-    diag.source = "d2v";
-    diag.code = iss.rule;
-    return diag;
+  const suppressed = getSuppressed();
+  const index: { line: number; issue: LintIssue }[] = [];
+  const diagnostics: vscode.Diagnostic[] = issues
+    .filter((iss) => !suppressed.has(suppressionKey(iss)))
+    .map((iss) => {
+      const lineIdx = Math.max(0, (iss.line ?? 1) - 1);
+      const safeLine = Math.min(lineIdx, Math.max(0, doc.lineCount - 1));
+      const range = doc.lineAt(safeLine).range;
+      const diag = new vscode.Diagnostic(
+        range,
+        `${iss.message}${iss.targets.length ? ` [${iss.targets.join(", ")}]` : ""}`,
+        severityOf(iss.severity)
+      );
+      diag.source = "d2v";
+      diag.code = iss.rule;
+      diagnosticIssues.set(diag, iss);
+      index.push({ line: safeLine, issue: iss });
+      return diag;
   });
   collection.set(doc.uri, diagnostics);
+  lintIndexByUri.set(doc.uri.toString(), index);
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +376,36 @@ const completionProvider: vscode.CompletionItemProvider = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Quick Fix（波線を個別に非表示にする）
+// ---------------------------------------------------------------------------
+
+const lintCodeActionProvider: vscode.CodeActionProvider = {
+  provideCodeActions(_document, _range, context) {
+    const actions: vscode.CodeAction[] = [];
+    for (const diag of context.diagnostics) {
+      const iss = diag.source === "d2v" ? diagnosticIssues.get(diag) : undefined;
+      if (!iss) {
+        continue;
+      }
+      const label = iss.targets.length
+        ? `d2v: この波線を非表示にする（${iss.rule} / ${iss.targets.join(", ")}）`
+        : `d2v: この波線を非表示にする（${iss.rule}）`;
+      const action = new vscode.CodeAction(label, vscode.CodeActionKind.QuickFix);
+      action.diagnostics = [diag];
+      action.command = {
+        command: "d2v.suppressLint",
+        title: "d2v design lint を非表示にする",
+        arguments: [suppressionKey(iss)],
+      };
+      actions.push(action);
+    }
+    return actions;
+  },
+};
+
 export function activate(context: vscode.ExtensionContext): void {
+  extensionContext = context;
   let debounce: NodeJS.Timeout | undefined;
 
   const scheduleUpdate = () => {
@@ -354,7 +427,20 @@ export function activate(context: vscode.ExtensionContext): void {
   // design lint（波線）
   const lintCollection = vscode.languages.createDiagnosticCollection("d2v");
   context.subscriptions.push(lintCollection);
-  const lint = (doc: vscode.TextDocument) => void runLint(doc, lintCollection);
+
+  // カーソル行に d2v の波線があるかを context key に反映（右クリックメニューの出し分け）
+  const updateLintAtCursor = () => {
+    const editor = vscode.window.activeTextEditor;
+    const has =
+      !!editor &&
+      (lintIndexByUri.get(editor.document.uri.toString()) ?? []).some(
+        (e) => e.line === editor.selection.active.line
+      );
+    void vscode.commands.executeCommand("setContext", "d2v.lintAtCursor", has);
+  };
+
+  const lint = (doc: vscode.TextDocument) =>
+    void runLint(doc, lintCollection).then(updateLintAtCursor);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("d2v.openFocusPreview", () => {
@@ -369,6 +455,56 @@ export function activate(context: vscode.ExtensionContext): void {
         `d2v: カーソル追従を${next ? "ON" : "OFF"}にしました。`
       );
     }),
+    // Quick Fix から呼ばれる: 指定した波線を非表示にして再 lint する
+    vscode.commands.registerCommand("d2v.suppressLint", async (key: string) => {
+      if (!key) {
+        return;
+      }
+      await addSuppressed(key);
+      vscode.workspace.textDocuments.forEach(lint);
+    }),
+    vscode.commands.registerCommand("d2v.clearSuppressedLints", async () => {
+      await clearSuppressed();
+      vscode.workspace.textDocuments.forEach(lint);
+      vscode.window.showInformationMessage("d2v: 非表示にした design lint を復元しました。");
+    }),
+    // 右クリックメニューから呼ばれる: カーソル行の波線を非表示にする
+    vscode.commands.registerCommand("d2v.suppressLintAtCursor", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        return;
+      }
+      const line = editor.selection.active.line;
+      const entries = (lintIndexByUri.get(editor.document.uri.toString()) ?? []).filter(
+        (e) => e.line === line
+      );
+      if (entries.length === 0) {
+        vscode.window.showInformationMessage("d2v: この行に非表示にできる波線はありません。");
+        return;
+      }
+      let targets = entries;
+      if (entries.length > 1) {
+        const picked = await vscode.window.showQuickPick(
+          [
+            ...entries.map((e) => ({
+              label: e.issue.rule,
+              description: e.issue.targets.join(", "),
+              entry: e as { line: number; issue: LintIssue } | undefined,
+            })),
+            { label: "この行のすべて", description: "", entry: undefined },
+          ],
+          { placeHolder: "非表示にする波線を選択" }
+        );
+        if (!picked) {
+          return;
+        }
+        targets = picked.entry ? [picked.entry] : entries;
+      }
+      for (const e of targets) {
+        await addSuppressed(suppressionKey(e.issue));
+      }
+      vscode.workspace.textDocuments.forEach(lint);
+    }),
     vscode.languages.registerCompletionItemProvider(
       { language: "yaml" },
       completionProvider,
@@ -376,11 +512,20 @@ export function activate(context: vscode.ExtensionContext): void {
       " ",
       ":"
     ),
+    vscode.languages.registerCodeActionsProvider(
+      { language: "yaml" },
+      lintCodeActionProvider,
+      { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+    ),
     // design lint: 保存・オープン時に実行
     vscode.workspace.onDidSaveTextDocument(lint),
     vscode.workspace.onDidOpenTextDocument(lint),
-    vscode.workspace.onDidCloseTextDocument((doc) => lintCollection.delete(doc.uri)),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      lintCollection.delete(doc.uri);
+      lintIndexByUri.delete(doc.uri.toString());
+    }),
     vscode.window.onDidChangeTextEditorSelection((e) => {
+      updateLintAtCursor();
       if (looksLikeTopology(e.textEditor.document)) {
         scheduleUpdate();
       }
@@ -391,7 +536,22 @@ export function activate(context: vscode.ExtensionContext): void {
         scheduleUpdate();
       }
     }),
-    vscode.window.onDidChangeActiveTextEditor(() => scheduleUpdate())
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      updateLintAtCursor();
+      scheduleUpdate();
+    }),
+    // lint.enable の切り替えを即座に反映（OFF なら全クリア、ON なら再 lint）
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("d2v.lint.enable")) {
+        if (vscode.workspace.getConfiguration("d2v").get("lint.enable", true)) {
+          vscode.workspace.textDocuments.forEach(lint);
+        } else {
+          lintCollection.clear();
+          lintIndexByUri.clear();
+          updateLintAtCursor();
+        }
+      }
+    })
   );
 
   // 起動時にアクティブな YAML を一度 lint する

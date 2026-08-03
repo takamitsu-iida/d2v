@@ -28,6 +28,16 @@
         "command": "d2v.toggleFollow",
         "title": "d2v: カーソル追従の ON/OFF",
         "category": "d2v"
+      },
+      {
+        "command": "d2v.suppressLintAtCursor",
+        "title": "d2v: この行の波線を非表示にする",
+        "category": "d2v"
+      },
+      {
+        "command": "d2v.clearSuppressedLints",
+        "title": "d2v: 非表示にした design lint を復元",
+        "category": "d2v"
       }
     ],
     "menus": {
@@ -36,6 +46,19 @@
           "command": "d2v.openFocusPreview",
           "when": "editorLangId == yaml",
           "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "d2v.suppressLintAtCursor",
+          "when": "editorLangId == yaml && d2v.lintAtCursor",
+          "group": "d2v@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "d2v.suppressLintAtCursor",
+          "when": "false"
         }
       ]
     },
@@ -71,6 +94,11 @@
           "minimum": 0,
           "maximum": 2000,
           "description": "カーソル移動・編集からプレビュー更新までの待ち時間（ミリ秒）。"
+        },
+        "d2v.lint.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "design lint（ポリシー違反の波線・診断）を表示する。false にすると波線を出さない。"
         }
       }
     }

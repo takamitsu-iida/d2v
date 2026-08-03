@@ -29,6 +29,7 @@ class TopologyModel:
     subnets: list[_YamlDict] = field(default_factory=list)
     device_map: dict[str, _YamlDict] = field(default_factory=dict)
     lags: list[_YamlDict] = field(default_factory=list)
+    vlans: list[_YamlDict] = field(default_factory=list)
 
     def zone_of(self, device_id: str) -> str:
         """デバイス ID からゾーン名を返す（未設定なら空文字）。"""
@@ -76,6 +77,7 @@ def load_model(path: Path) -> TopologyModel:
     subnets: list[_YamlDict] = layer3.get("ip-subnet", [])
     layer2 = root.get("layer2-layer", {})
     lags: list[_YamlDict] = layer2.get("link-aggregation", [])
+    vlans: list[_YamlDict] = layer2.get("vlan", [])
 
     device_map: dict[str, _YamlDict] = {d["device-id"]: d for d in devices}
 
@@ -85,6 +87,7 @@ def load_model(path: Path) -> TopologyModel:
         subnets=subnets,
         device_map=device_map,
         lags=lags,
+        vlans=vlans,
     )
 
 

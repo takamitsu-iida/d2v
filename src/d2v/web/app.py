@@ -649,5 +649,44 @@ def index() -> FileResponse:
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+# ---------------------------------------------------------------------------
+# 設計書生成 API（report）
+# ---------------------------------------------------------------------------
+
+
+class ReportRequest(BaseModel):
+    """設計書生成リクエスト。"""
+
+    source: str = Field("example", description="'example' | 'text'")
+    example: str | None = None
+    yaml_text: str | None = None
+    format: str = Field("markdown", description="'markdown' | 'json'")
+    sections: list[str] | None = None
+
+
+@app.post("/api/report")
+def generate_report(req: ReportRequest) -> dict:
+    """トポロジ YAML から設計書を生成して返す（Markdown / JSON）。
+
+    LLM 不要・決定論的なため同期で即時に完結する。
+    """
+    from d2v import docgen
+
+    if req.format not in ("markdown", "json"):
+        raise HTTPException(400, "format は markdown または json を指定してください。")
+
+    text = _read_yaml_source(req.source, req.example, req.yaml_text)
+    model = _load_model_from_text(text)
+    title = req.example.removesuffix(".yaml") if req.example else "topology"
+    data = docgen.extract(model, title=title)
+
+    if req.format == "json":
+        content = docgen.to_json(data)
+    else:
+        content = docgen.to_markdown(data, sections=req.sections)
+
+    return {"format": req.format, "content": content, "title": title}
+
+
 # 静的アセット（app.js / style.css など）を /static で配信する
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
