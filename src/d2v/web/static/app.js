@@ -382,8 +382,26 @@ async function loadResults(jobId) {
 }
 
 let DETAIL_MODE = "image";
+let IMG_ZOOM = 1.0;
+const ZOOM_STEP = 0.25;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 4.0;
+
+function setImgZoom(z) {
+  IMG_ZOOM = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const img = document.getElementById("result-image");
+  img.style.width = (IMG_ZOOM * 100) + "%";
+  document.getElementById("zoom-label").textContent = Math.round(IMG_ZOOM * 100) + "%";
+}
+
+function initZoomControls() {
+  document.getElementById("zoom-in-btn").addEventListener("click", () => setImgZoom(IMG_ZOOM + ZOOM_STEP));
+  document.getElementById("zoom-out-btn").addEventListener("click", () => setImgZoom(IMG_ZOOM - ZOOM_STEP));
+  document.getElementById("zoom-reset-btn").addEventListener("click", () => setImgZoom(1.0));
+}
 
 function showOutput(jobId, output) {
+  setImgZoom(1.0);
   const key = encodeURIComponent(output.key);
   const bust = Date.now();
   document.getElementById("result-image").src = `/api/jobs/${jobId}/image?key=${key}&t=${bust}`;
@@ -1125,6 +1143,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initModeToggle();
   initOpacityLabel();
   initDetailTabs();
+  initZoomControls();
   initV2d();
   initHistory();
   initShare();

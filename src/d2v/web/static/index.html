@@ -136,6 +136,12 @@
             <div class="result-tabs" id="result-tabs"></div>
             <div class="result-body">
               <div class="img-view">
+                <div class="zoom-bar">
+                  <button type="button" class="zoom-btn" id="zoom-out-btn" title="縮小（Ctrl+スクロール）">−</button>
+                  <span id="zoom-label">100%</span>
+                  <button type="button" class="zoom-btn" id="zoom-in-btn" title="拡大（Ctrl+スクロール）">＋</button>
+                  <button type="button" class="zoom-btn" id="zoom-reset-btn" title="実際のサイズに戻す">⊙</button>
+                </div>
                 <img id="result-image" alt="生成された構成図" />
               </div>
               <div class="detail-tabs">

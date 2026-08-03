@@ -223,7 +223,35 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   max-height: 520px;
 }
 .img-view[hidden] { display: none; }
-.img-view img { max-width: 100%; display: block; }
+.img-view img { display: block; }
+
+.zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  position: sticky;
+  left: 0;
+  background: #fff;
+}
+.zoom-btn {
+  appearance: none;
+  border: 1px solid #bbb;
+  background: #f0f0f0;
+  color: #333;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.zoom-btn:hover { background: #ddd; }
+#zoom-label { font-size: 12px; color: #555; min-width: 38px; text-align: center; }
 
 .checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 .chk { font-size: 11px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); }
