@@ -1,0 +1,24 @@
+! IOS-XE コンフィグ（設計通り: sample_topology_small.yaml の router-01 に対応）
+!
+version 17.6
+hostname router-01
+!
+interface Loopback0
+ ip address 10.0.0.1 255.255.255.255
+!
+interface GigabitEthernet0/0
+ description To ISP
+ ip address 203.0.113.1 255.255.255.252
+ no shutdown
+!
+interface GigabitEthernet0/1
+ description To Firewall
+ ip address 10.1.0.1 255.255.255.252
+ no shutdown
+!
+router bgp 65000
+ bgp router-id 10.0.0.1
+ neighbor 10.1.0.2 remote-as 65001
+ neighbor 10.1.0.2 description To fw-01
+!
+end

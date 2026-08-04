@@ -159,32 +159,32 @@ AuditReport
 - [x] `AuditIssue` モデル
 - [x] `AuditReport` モデル（`from_issues()` クラスメソッド含む）
 
-### Phase 2 — LLM 抽出器
+### Phase 2 — LLM 抽出器 ✅
 **ファイル**: `src/d2v/audit/extractor.py`, `prompts/config-extract.md`
 
-- [ ] `prompts/config-extract.md`（ベンダー自動判別・JSON 抽出指示）
-- [ ] `extract_from_config(config_text, device_id) -> ExtractedConfig`
-- [ ] JSON パース + Pydantic 検証（`v2d/extractor.py` と同パターン）
+- [x] `prompts/config-extract.md`（ベンダー自動判別・JSON 抽出指示）
+- [x] `extract_from_config(config_text, device_id) -> ExtractedConfig`
+- [x] JSON パース + Pydantic 検証（`v2d/extractor.py` と同パターン）
 
-### Phase 3 — 比較ルール
+### Phase 3 — 比較ルール ✅
 **ファイル**: `src/d2v/audit/comparator.py`
 
-- [ ] `compare(model, configs) -> AuditReport` メイン関数
-- [ ] `rule_device_unmatched`
-- [ ] `rule_iface_ip_mismatch`
-- [ ] `rule_iface_missing`
-- [ ] `rule_iface_extra`
-- [ ] `rule_description_mismatch`
-- [ ] `rule_lag_member_mismatch`
-- [ ] `rule_bgp_peer_missing`
-- [ ] `rule_bgp_asn_mismatch`
-- [ ] `rule_hostname_mismatch`
+- [x] `compare(model, configs) -> AuditReport` メイン関数
+- [x] `rule_device_unmatched`
+- [x] `rule_iface_ip_mismatch`
+- [x] `rule_iface_missing`
+- [x] `rule_iface_extra`
+- [x] `rule_description_mismatch`
+- [x] `rule_lag_member_mismatch`
+- [x] `rule_bgp_peer_missing`
+- [x] `rule_bgp_asn_mismatch`
+- [x] `rule_hostname_mismatch`
 
-### Phase 4 — 出力フォーマッタ
+### Phase 4 — 出力フォーマッタ ✅
 **ファイル**: `src/d2v/audit/reporter.py`
 
-- [ ] Rich コンソール出力（デバイス別グループ表示）
-- [ ] JSON 出力（`--format json`）
+- [x] Rich コンソール出力（デバイス別グループ表示）
+- [x] JSON 出力（`--format json`）
 
 ### Phase 5 — パイプライン + CLI
 **ファイル**: `src/d2v/audit/pipeline.py`, `src/d2v/audit/__init__.py`, `main.py`
