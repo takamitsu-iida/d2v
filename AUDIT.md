@@ -186,13 +186,13 @@ AuditReport
 - [x] Rich コンソール出力（デバイス別グループ表示）
 - [x] JSON 出力（`--format json`）
 
-### Phase 5 — パイプライン + CLI
+### Phase 5 — パイプライン + CLI ✅
 **ファイル**: `src/d2v/audit/pipeline.py`, `src/d2v/audit/__init__.py`, `main.py`
 
-- [ ] `pipeline.run(design_path, config_paths) -> AuditReport`
-- [ ] `__init__.py` で `run` を公開
-- [ ] `main.py` に `audit` サブコマンド追加（`run_audit()`）
-- [ ] `--config-dir` / `--config` / `--format` オプション
+- [x] `pipeline.run(design_path, config_files) -> AuditResult`
+- [x] `__init__.py` で `run` を公開
+- [x] `main.py` に `audit` サブコマンド追加（`run_audit()`）
+- [x] `--config-dir` / `--config` / `--format` オプション
 
 ### Phase 6 — テスト
 **ファイル**: `tests/test_config_audit.py`, `tests/fixtures/`

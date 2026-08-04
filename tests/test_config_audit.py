@@ -10,6 +10,7 @@ import pytest
 from d2v.audit import render_report, to_json
 from d2v.audit.comparator import _iface_match, _norm_iface, compare
 from d2v.audit.extractor import ExtractionError, extract_from_config
+from d2v.audit.pipeline import _collect_config_paths, run
 from d2v.audit.schema import AuditIssue, AuditReport, ExtractedBgpPeer, ExtractedConfig, ExtractedInterface
 from d2v.parser import TopologyModel
 
@@ -441,3 +442,86 @@ def test_to_json_empty():
     data = json.loads(to_json(report))
     assert data["ok"] is True
     assert data["issues"] == []
+
+
+# ---------------------------------------------------------------------------
+# pipeline ユニットテスト
+# ---------------------------------------------------------------------------
+
+_OK_CFG_JSON = json.dumps({
+    "device_id": "router-01",
+    "hostname": "router-01",
+    "vendor": "iosxe",
+    "interfaces": [
+        {"name": "GigabitEthernet0/0", "ip_address": "203.0.113.1/30",
+         "description": "To ISP", "admin_state": "up", "lag_group": None},
+        {"name": "GigabitEthernet0/1", "ip_address": "10.1.0.1/30",
+         "description": "To Firewall", "admin_state": "up", "lag_group": None},
+    ],
+    "bgp_peers": [],
+    "vlans": [],
+    "confidence": 0.95,
+})
+
+
+def test_collect_config_paths_dir(tmp_path):
+    (tmp_path / "router-01.txt").write_text("config")
+    (tmp_path / "fw-01.txt").write_text("config")
+    paths = _collect_config_paths(None, tmp_path)
+    stems = {p.stem for p in paths}
+    assert stems == {"router-01", "fw-01"}
+
+
+def test_collect_config_paths_files(tmp_path):
+    f = tmp_path / "router-01.txt"
+    f.write_text("config")
+    paths = _collect_config_paths([f], None)
+    assert paths == [f]
+
+
+def test_collect_config_paths_missing_file(tmp_path):
+    from d2v.errors import InputError
+    with pytest.raises(InputError, match="見つかりません"):
+        _collect_config_paths([tmp_path / "nonexistent.txt"], None)
+
+
+def test_collect_config_paths_empty_dir(tmp_path):
+    from d2v.errors import InputError
+    with pytest.raises(InputError, match="見つかりません"):
+        _collect_config_paths(None, tmp_path)
+
+
+def test_pipeline_run_ok(monkeypatch, tmp_path):
+    """設計通りのコンフィグで ok=True になることを確認。"""
+    class _FakeLLM:
+        def chat(self, system, user):
+            return _OK_CFG_JSON
+    monkeypatch.setattr("d2v.audit.extractor.get_llm", lambda: _FakeLLM())
+
+    cfg_file = tmp_path / "router-01.txt"
+    cfg_file.write_text((FIXTURES / "config_router_ok.txt").read_text())
+
+    result = run(
+        design_path=Path("examples/sample_topology_small.yaml"),
+        config_files=[cfg_file],
+    )
+    assert result.report.ok
+    assert result.extraction_errors == {}
+
+
+def test_pipeline_extraction_error(monkeypatch, tmp_path):
+    """抽出失敗時に extraction-failed issue が追加されることを確認。"""
+    class _BrokenLLM:
+        def chat(self, system, user):
+            return "これは JSON ではありません"
+    monkeypatch.setattr("d2v.audit.extractor.get_llm", lambda: _BrokenLLM())
+
+    cfg_file = tmp_path / "router-01.txt"
+    cfg_file.write_text("dummy config")
+
+    result = run(
+        design_path=Path("examples/sample_topology_small.yaml"),
+        config_files=[cfg_file],
+    )
+    assert "router-01" in result.extraction_errors
+    assert any(i.rule == "extraction-failed" for i in result.report.issues)

@@ -6,6 +6,7 @@
   v2d            vision-to-diagram: 構成図画像 → iida-network-model YAML
   validate       セマンティック検証（design lint）: 設計上の問題を検出
   diff           2 つのトポロジの意味的 diff ＋ 差分図
+  audit          コンフィグ適合検査: 機器コンフィグが設計 YAML 通りか検査
 """
 
 from __future__ import annotations
@@ -44,6 +45,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "report":
         run_report(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "audit":
+        run_audit(sys.argv[2:])
         return
     # ── [削除可能] 決定論的ジェネレータ（LLM 非依存）: src/d2v/detgen.py と
     #    この 4 行を消せば丸ごと撤去できる ─────────────────────────
@@ -725,6 +729,95 @@ def run_report(argv: list[str]) -> None:
         console.print(f"[bold green]✓ 設計書を出力しました:[/bold green] {args.output}")
     else:
         print(text)
+
+
+# ---------------------------------------------------------------------------
+# audit サブコマンド（コンフィグ適合検査）
+# ---------------------------------------------------------------------------
+
+
+def run_audit(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(
+        prog="d2v audit",
+        description="機器コンフィグが iida-network-model 設計 YAML 通りに作られているかを検査します。",
+        epilog="""\
+使い方の例:
+  # コンフィグディレクトリを一括検査
+  python main.py audit -i examples/sample_topology_small.yaml --config-dir configs/
+
+  # ファイルを個別指定（ファイル名の stem が device-id に対応）
+  python main.py audit -i design.yaml --config configs/router-01.txt configs/fw-01.txt
+
+  # JSON 出力（CI 連携用）
+  python main.py audit -i design.yaml --config-dir configs/ --format json
+""",
+    )
+    ap.add_argument(
+        "--input", "-i",
+        required=True,
+        type=Path,
+        metavar="TOPOLOGY_YAML",
+        help="検査基準となる設計 YAML",
+    )
+    config_group = ap.add_mutually_exclusive_group(required=True)
+    config_group.add_argument(
+        "--config",
+        nargs="+",
+        type=Path,
+        metavar="CONFIG_FILE",
+        help="コンフィグファイル（複数指定可。ファイル名 stem = device-id）",
+    )
+    config_group.add_argument(
+        "--config-dir",
+        type=Path,
+        metavar="DIR",
+        help="コンフィグファイルを *.txt で一括探索するディレクトリ",
+    )
+    ap.add_argument(
+        "--format", "-f",
+        choices=["text", "json"],
+        default="text",
+        help="出力フォーマット（デフォルト: text）",
+    )
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="warning も不合格（終了コード 1）として扱う",
+    )
+    args = ap.parse_args(argv)
+
+    from d2v import audit
+    from d2v.audit.extractor import ExtractionError
+
+    if args.format == "text":
+        console.print(Panel(
+            f"設計 YAML     : [bold cyan]{args.input}[/bold cyan]\n"
+            + (f"コンフィグ    : [bold cyan]{args.config_dir}/*.txt[/bold cyan]"
+               if args.config_dir
+               else f"コンフィグ    : [bold cyan]{', '.join(str(p) for p in (args.config or []))}[/bold cyan]"),
+            title="[bold blue]d2v  コンフィグ適合検査（audit）[/bold blue]",
+            expand=False,
+        ))
+
+    try:
+        result = audit.run(
+            design_path=args.input,
+            config_files=args.config,
+            config_dir=args.config_dir,
+        )
+    except D2VError as e:
+        console.print(f"\n[bold red]✗ {e}[/bold red]\n")
+        sys.exit(1)
+
+    if args.format == "json":
+        console.print_json(audit.to_json(result.report))
+    else:
+        if result.extraction_errors:
+            console.print(f"[yellow]⚠ 抽出エラー {len(result.extraction_errors)} 件: "
+                          f"{', '.join(result.extraction_errors.keys())}[/yellow]")
+        console.print(audit.render_report(result.report))
+
+    sys.exit(0 if result.report.passed(strict=args.strict) else 1)
 
 
 if __name__ == "__main__":
