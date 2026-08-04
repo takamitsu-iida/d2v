@@ -525,3 +525,95 @@ def test_pipeline_extraction_error(monkeypatch, tmp_path):
     )
     assert "router-01" in result.extraction_errors
     assert any(i.rule == "extraction-failed" for i in result.report.issues)
+
+
+_NG_CFG_JSON = json.dumps({
+    "device_id": "router-01",
+    "hostname": "Router01",          # hostname-mismatch (warning)
+    "vendor": "iosxe",
+    "interfaces": [
+        {"name": "GigabitEthernet0/0", "ip_address": "203.0.113.1/30",
+         "description": "To ISP", "admin_state": "up", "lag_group": None},
+        {"name": "GigabitEthernet0/1", "ip_address": "10.1.0.99/30",  # iface-ip-mismatch (error)
+         "description": "To Upstream", "admin_state": "up", "lag_group": None},
+    ],
+    "bgp_peers": [],
+    "vlans": [],
+    "confidence": 0.9,
+})
+
+
+def test_pipeline_run_ng(monkeypatch, tmp_path):
+    """逸脱コンフィグで ok=False になり適切な rule が検出されることを確認。"""
+    class _FakeLLM:
+        def chat(self, system, user):
+            return _NG_CFG_JSON
+    monkeypatch.setattr("d2v.audit.extractor.get_llm", lambda: _FakeLLM())
+
+    cfg_file = tmp_path / "router-01.txt"
+    cfg_file.write_text((FIXTURES / "config_router_ng.txt").read_text())
+
+    result = run(
+        design_path=Path("examples/sample_topology_small.yaml"),
+        config_files=[cfg_file],
+    )
+    assert not result.report.ok
+    rules = {i.rule for i in result.report.issues}
+    assert "iface-ip-mismatch" in rules
+    assert "hostname-mismatch" in rules
+
+
+def test_passed_strict_mode():
+    """strict=True では warning も不合格になることを確認。"""
+    issues = [AuditIssue(rule="hostname-mismatch", severity="warning",
+                         device_id="router-01", message="mismatch")]
+    report = AuditReport.from_issues(issues)
+    assert report.ok                        # error なし → ok=True
+    assert report.passed() is True          # 通常モードは合格
+    assert report.passed(strict=True) is False  # strict では不合格
+
+
+def test_lag_member_extra():
+    """設計にない LAG メンバーが info で報告されることを確認。"""
+    model = _make_model(
+        devices=[{"device-id": "sw-01", "interface": []}],
+        lags=[{
+            "device-id": "sw-01",
+            "lag-id": "Port-channel1",
+            "member-interface": [{"interface-id": "GigabitEthernet0/1"}],
+        }],
+    )
+    cfg = _make_cfg("sw-01", interfaces=[
+        ExtractedInterface(name="GigabitEthernet0/1", lag_group="Port-channel1"),
+        ExtractedInterface(name="GigabitEthernet0/2", lag_group="Port-channel1"),  # 余分
+    ])
+    report = compare(model, [cfg])
+    extra_issues = [i for i in report.issues
+                    if i.rule == "lag-member-mismatch" and i.severity == "info"]
+    assert extra_issues, "余分な LAG メンバーが info で報告されること"
+
+
+def test_collect_config_paths_not_a_dir(tmp_path):
+    """--config-dir にファイルを指定した場合はエラーになることを確認。"""
+    from d2v.errors import InputError
+    f = tmp_path / "not_a_dir.txt"
+    f.write_text("config")
+    with pytest.raises(InputError, match="ディレクトリではありません"):
+        _collect_config_paths(None, f)
+
+
+def test_iface_missing_no_ip_skipped():
+    """設計上 IP なしのインターフェースは iface-missing の対象外であることを確認。"""
+    model = _make_model(devices=[{
+        "device-id": "sw-01",
+        "interface": [
+            {"interface-id": "GigabitEthernet0/1"},           # IP なし → スキップ
+            {"interface-id": "GigabitEthernet0/2", "ip-address": "10.0.0.1/30"},
+        ],
+    }])
+    cfg = _make_cfg("sw-01", interfaces=[
+        ExtractedInterface(name="GigabitEthernet0/2", ip_address="10.0.0.1/30"),
+        # GigabitEthernet0/1 はコンフィグになくても iface-missing にならない
+    ])
+    report = compare(model, [cfg])
+    assert not any(i.rule == "iface-missing" for i in report.issues)

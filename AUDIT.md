@@ -194,11 +194,11 @@ AuditReport
 - [x] `main.py` に `audit` サブコマンド追加（`run_audit()`）
 - [x] `--config-dir` / `--config` / `--format` オプション
 
-### Phase 6 — テスト
+### Phase 6 — テスト ✅
 **ファイル**: `tests/test_config_audit.py`, `tests/fixtures/`
 
-- [ ] `tests/fixtures/config_router_ok.txt`（設計通りコンフィグ）
-- [ ] `tests/fixtures/config_router_ng.txt`（逸脱コンフィグ）
-- [ ] `extractor` ユニットテスト（LLM モック）
-- [ ] `comparator` ユニットテスト（`ExtractedConfig` 直接生成）
-- [ ] `pipeline` 統合テスト
+- [x] `tests/fixtures/config_router_ok.txt`（設計通りコンフィグ）
+- [x] `tests/fixtures/config_router_ng.txt`（逸脱コンフィグ）
+- [x] `extractor` ユニットテスト（LLM モック）
+- [x] `comparator` ユニットテスト（`ExtractedConfig` 直接生成）
+- [x] `pipeline` 統合テスト
