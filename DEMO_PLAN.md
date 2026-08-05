@@ -291,14 +291,14 @@ Web UI ルートのみの変更なので、既存 API に影響しない。
 
 ```
 Priority 1 (デモ前日まで必須)
-  [ ] Task 1: demo/cache/ の生成（prep_cache.py + 実行）
-  [ ] Task 2: demo/fixtures/ の作成
-  [ ] Task 3: demo.py コア実装（playback モード）
-  [ ] Task 9: SCRIPT.md 作成
+  [x] Task 1: demo/cache/ の生成（prep_cache.py + 実行）
+  [x] Task 2: demo/fixtures/ の作成
+  [x] Task 3: demo.py コア実装（playback モード）
+  [x] Task 9: SCRIPT.md 作成
 
 Priority 2 (あると大幅に映える)
-  [ ] Task 6: validate 演出の polish
-  [ ] Task 7: diff 演出の polish
+  [x] Task 6: validate 演出の polish
+  [x] Task 7: diff 演出の polish
   [ ] Task 4: スケール reveal アニメーション
 
 Priority 3 (余裕があれば)

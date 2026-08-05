@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -328,6 +329,15 @@ def scene3_v2d(*, open_images: bool = False) -> None:
 _SEVERITY_STYLE = {"error": "bold red", "warning": "yellow", "info": "cyan"}
 _SEVERITY_ICON  = {"error": "❌", "warning": "⚠", "info": "ℹ"}
 
+# 80 カラム端末でも折り返さない短縮メッセージ
+_RULE_SHORT = {
+    "ip-address-overlap":    "IP アドレス重複",
+    "iface-subnet-mismatch": "サブネット不一致",
+    "isolated-device":       "孤立ノード",
+    "spof-device":           "単一障害点（停止で分断）",
+    "spof-bridge-link":      "橋リンク（切断で分断）",
+}
+
 
 def scene4_validate(*, open_images: bool = False) -> None:
     if not _cache_check("scene5_validate"):
@@ -354,41 +364,77 @@ def scene4_validate(*, open_images: bool = False) -> None:
     time.sleep(0.6)
 
     console.print()
-    _progress_bar("  セマンティック検証中...", seconds=1.2)
+    _progress_bar("  [1/3] トポロジ読み込み...  ", seconds=0.4)
+    _progress_bar("  [2/3] グラフ構築中...      ", seconds=0.5)
+    _progress_bar("  [3/3] セマンティック検証...", seconds=1.0)
     console.print()
 
-    # issues を 1 件ずつ表示
-    seen_rules: set[str] = set()
-    shown = 0
+    # issues を 1 件ずつ表示（targets で対象デバイスを明示）
+    bridge_total = sum(1 for i in issues if i["rule"] == "spof-bridge-link")
+    seen_bridge = False
+
     for issue in issues:
-        rule = issue["rule"]
-        sev = issue.get("severity", "warning")
-        msg = issue["message"]
-        icon = _SEVERITY_ICON.get(sev, "·")
-        style = _SEVERITY_STYLE.get(sev, "")
+        rule    = issue["rule"]
+        sev     = issue.get("severity", "warning")
+        msg     = issue["message"]
+        targets = issue.get("targets", [])
+        icon    = _SEVERITY_ICON.get(sev, "·")
+        sty     = _SEVERITY_STYLE.get(sev, "")
 
-        # spof-bridge-link は代表 1 件のみ表示
-        if rule == "spof-bridge-link" and rule in seen_rules:
-            continue
-        seen_rules.add(rule)
+        if rule == "spof-bridge-link":
+            if seen_bridge:
+                continue
+            seen_bridge = True
 
-        short_msg = msg[:68] + ("…" if len(msg) > 68 else "")
-        console.print(
-            f"  {icon}  [{style}][{sev.upper():7}][/{style}]  "
-            f"[bold]{escape(rule)}[/bold]:  {escape(short_msg)}"
-        )
-        time.sleep(0.35)
-        shown += 1
+        # インターフェース名を除去して短いデバイス名に
+        cleaned = [re.sub(r"\[.*\]", "", t) for t in targets[:2]]
+        if rule == "spof-bridge-link":
+            target_str = f"{bridge_total} links"
+        elif len(cleaned) == 2:
+            target_str = f"{cleaned[0]}/{cleaned[1]}"
+        else:
+            target_str = cleaned[0] if cleaned else ""
+
+        short_msg = _RULE_SHORT.get(rule, msg[:28] + ("…" if len(msg) > 28 else ""))
+
+        t = Text()
+        t.append(f"  {icon}  ", style=sty)
+        t.append(f"{sev.upper():<7}", style=sty)
+        t.append("  ")
+        t.append(f"{rule:<22}", style="bold")
+        t.append("  ")
+        t.append(f"{target_str:<14}", style="cyan")
+        t.append("  ")
+        t.append(short_msg, style="dim")
+        t.truncate(console.width - 2, overflow="ellipsis")
+        console.print(t)
+        time.sleep(0.42)
+
+    # 設計評価サマリ（固定文言）
+    time.sleep(0.5)
+    console.print()
+    console.print(Panel(
+        "[italic dim]"
+        "「この設計は可用性に深刻な問題を抱えています。\n"
+        "  fw-01・core-sw-01・office-sw-01 が単一障害点であり、\n"
+        "  いずれかが停止するとネットワークが分断されます。\n"
+        "  IP アドレス 10.1.1.1 の重複も検出されています。\n"
+        "  本番投入前に冗長構成と IP 設計の見直しが必要です。」[/italic dim]",
+        title="[bold yellow]⚡ 設計評価サマリ[/bold yellow]",
+        border_style="yellow",
+        expand=False,
+    ))
+    time.sleep(0.3)
 
     counts = report.get("counts", {})
     console.print()
-    ok_color = "green" if report.get("ok") else "red"
     console.print(Panel(
-        f"  結果 : [{ok_color}]{'OK' if report['ok'] else 'NG'}[/{ok_color}]  /"
-        f"  error [bold red]{counts.get('error', 0)}[/bold red] 件  "
+        f"  結果 : [bold red]NG[/bold red]  /  "
+        f"error [bold red]{counts.get('error', 0)}[/bold red] 件  "
         f"warning [bold yellow]{counts.get('warning', 0)}[/bold yellow] 件",
-        title="[bold red]✗ 設計上の問題を検出[/bold red]" if not report["ok"]
+        title="[bold red]✗ 設計上の問題を検出[/bold red]" if not report.get("ok")
               else "[bold green]✓ 問題なし[/bold green]",
+        border_style="red" if not report.get("ok") else "green",
         expand=False,
     ))
 
@@ -424,22 +470,39 @@ def scene5_diff(*, open_images: bool = False) -> None:
     time.sleep(0.6)
 
     console.print()
-    _progress_bar("  構造差分を算出中...", seconds=0.8)
-    console.print()
+    _progress_bar("  [1/2] 構造差分を検出中...", seconds=0.8)
 
-    # 差分サマリー
     nodes_removed = summary.get("nodes_removed", [])
     edges_removed = summary.get("edges_removed", [])
-    if nodes_removed:
-        console.print(f"  [red]- ノード削除 : {', '.join(nodes_removed)}[/red]")
-    for edge in edges_removed:
-        console.print(f"  [red]- リンク削除 : {edge}[/red]")
-        time.sleep(0.2)
+    nodes_added   = summary.get("nodes_added", [])
+    edges_added   = summary.get("edges_added", [])
 
     console.print()
-    time.sleep(0.4)
+    # 削除された要素を見やすく列挙
+    if nodes_removed:
+        console.print(f"  [dim]▶ 削除ノード[/dim]")
+        for n in nodes_removed:
+            console.print(f"    [bold red]✕  {n}[/bold red]")
+            time.sleep(0.2)
+    if edges_removed:
+        console.print(f"  [dim]▶ 削除リンク[/dim]")
+        for e in edges_removed:
+            pretty = e.replace("__", "  ↔  ")
+            console.print(f"    [red]─  {pretty}[/red]")
+            time.sleep(0.2)
+    if nodes_added or edges_added:
+        for n in nodes_added:
+            console.print(f"    [green]✚  {n}[/green]")
+        for e in edges_added:
+            console.print(f"    [green]+  {e.replace('__', '  ↔  ')}[/green]")
+            time.sleep(0.15)
 
-    # Blast radius をドラマチックに表示
+    console.print()
+    _progress_bar("  [2/2] 影響範囲を算出中...", seconds=0.8)
+    console.print()
+    time.sleep(0.3)
+
+    # Blast Radius パネル
     blast = summary.get("blast_radius", [])
     blast_count = summary.get("blast_radius_count", 0)
 
@@ -452,6 +515,7 @@ def scene5_diff(*, open_images: bool = False) -> None:
 
     console.print(Panel(
         blast_text,
+        title="[bold red]⚠  障害波及範囲[/bold red]",
         border_style="red" if blast_count > 0 else "green",
         expand=False,
     ))
@@ -461,7 +525,7 @@ def scene5_diff(*, open_images: bool = False) -> None:
     console.print()
     console.print(Panel(
         f"  差分図 : [bold]{diff_img.relative_to(ROOT)}[/bold]\n"
-        "  凡例   : 削除=赤破線  追加=緑  変更=橙  変更なし=灰",
+        "  凡例   : [red]削除=赤破線[/red]  [green]追加=緑[/green]  橙=変更  灰=変更なし",
         title="[bold green]✓ 差分図を生成しました[/bold green]",
         expand=False,
     ))
