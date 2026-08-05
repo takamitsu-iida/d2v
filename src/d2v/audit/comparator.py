@@ -67,6 +67,14 @@ def _iface_match(design_name: str, config_name: str) -> bool:
     return _norm_iface(design_name) == _norm_iface(config_name)
 
 
+def _norm_lag_group(lag_group: str) -> str:
+    """LLM が channel-group 番号（例: '1'）のみを返した場合に Port-channelN に正規化する。"""
+    s = lag_group.strip()
+    if s.isdigit():
+        return f"port-channel{s}"
+    return _norm_iface(s)
+
+
 # ---------------------------------------------------------------------------
 # IP アドレス正規化
 # ---------------------------------------------------------------------------
@@ -98,6 +106,14 @@ def _config_iface_map(cfg: ExtractedConfig) -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # 比較ルール
+#
+# 新しいルールを追加する手順:
+#   1. `_check_<topic>(cfg, design_dev, ...) -> list[AuditIssue]` 関数を作成し、
+#      `_issue("rule-id", "error|warning|info", did, message, detail)` で issue を生成する。
+#   2. 関数内で検出した issue を list に追加して return する。
+#   3. `compare()` の各デバイスループ末尾で `issues.extend(_check_<topic>(...))` を呼ぶ。
+#   4. schema.py の AuditIssue に新フィールドが必要な場合はそちらも更新する。
+#   5. AUDIT.md の「比較ルール一覧」テーブルにルール ID・内容・重大度を追記する。
 # ---------------------------------------------------------------------------
 
 def _check_hostname(cfg: ExtractedConfig, design_dev: _YamlDict) -> list[AuditIssue]:
@@ -189,7 +205,7 @@ def _check_lags(cfg: ExtractedConfig, design_dev: _YamlDict, model: TopologyMode
         config_members: set[str] = {
             _norm_iface(i.name)
             for i in cfg.interfaces
-            if i.lag_group and _iface_match(i.lag_group, lag_id)
+            if i.lag_group and _norm_lag_group(i.lag_group) == _norm_iface(lag_id)
         }
 
         missing = design_members - config_members
@@ -334,5 +350,6 @@ def compare(model: TopologyModel, configs: list[ExtractedConfig]) -> AuditReport
         issues.extend(_check_interfaces(cfg, design_dev))
         issues.extend(_check_lags(cfg, design_dev, model))
         issues.extend(_check_bgp(cfg, design_dev, model, config_map))
+        # 新ルールを追加した場合はここに issues.extend(_check_<topic>(...)) を追加する
 
     return AuditReport.from_issues(issues)
