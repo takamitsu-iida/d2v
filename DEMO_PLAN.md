@@ -299,7 +299,7 @@ Priority 1 (デモ前日まで必須)
 Priority 2 (あると大幅に映える)
   [x] Task 6: validate 演出の polish
   [x] Task 7: diff 演出の polish
-  [ ] Task 4: スケール reveal アニメーション
+  [x] Task 4: スケール reveal アニメーション
 
 Priority 3 (余裕があれば)
   [ ] Task 5: v2d タイプライター演出

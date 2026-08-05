@@ -228,39 +228,87 @@ def scene2_scale(*, open_images: bool = False) -> None:
 
     console.print(Panel(
         "  入力ファイル    : [bold cyan]examples/sample_topology_large.yaml[/bold cyan]\n"
-        "  規模            : 73 ノード / 10 ゾーン / 82 リンク\n"
-        "  ノード数 > 閾値 : [yellow]自動分割モード（俯瞰図 ＋ ゾーン詳細）[/yellow]",
+        "  規模            : 73 ノード / 10 ゾーン / 82 リンク",
+        expand=False,
+    ))
+    time.sleep(0.5)
+
+    # ── Phase 1: 閾値検出 ──
+    console.print()
+    _progress_bar("  トポロジを解析中...", seconds=0.6)
+    console.print()
+    console.print(Panel(
+        "  ノード数 [bold red]73[/bold red] が分割閾値 [bold]40[/bold] を超えました\n"
+        "  → [yellow]自動分割モード[/yellow]  俯瞰図 1 枚 ＋ ゾーン詳細 10 枚を[bold]並列生成[/bold]します",
+        title="[bold yellow]⚡ 自動分割モード[/bold yellow]",
+        border_style="yellow",
+        expand=False,
+    ))
+    time.sleep(0.8)
+
+    # ── Phase 2: 並列生成（全バーを同時に進める）──
+    cache2 = CACHE_DIR / "scene2_large"
+    all_items = [("overview", "俯瞰図 (overview)")] + _LARGE_ZONES
+    steps = 12
+    console.print()
+    with Progress(
+        TextColumn("  {task.description}"),
+        BarColumn(bar_width=16, complete_style="cyan", finished_style="green"),
+        TextColumn("{task.percentage:>3.0f}%"),
+        console=console,
+        transient=False,
+    ) as prog:
+        task_ids = [
+            prog.add_task(f"{label:<28}", total=steps)
+            for _, label in all_items
+        ]
+        for step in range(steps):
+            for tid in task_ids:
+                prog.advance(tid, 1)
+            time.sleep(0.10)
+
+    console.print()
+    console.print(Panel(
+        f"  合計 [bold green]{len(all_items)} 枚[/bold green]を生成しました\n"
+        "  俯瞰図 1 枚  ＋  ゾーン詳細 10 枚",
+        title="[bold green]✓ 並列生成完了[/bold green]",
         expand=False,
     ))
     time.sleep(0.6)
 
-    # 各ゾーンが順に完了していくアニメーション
-    cache2 = CACHE_DIR / "scene2_large"
-    all_items = [("overview", "俯瞰図 (overview)")] + _LARGE_ZONES
+    # ── Phase 3: focus drilldown ──
     console.print()
-
-    for key, label in all_items:
-        img_path = cache2 / f"{key}.png"
-        exists = img_path.exists()
-        status = "[green]✓ 完了[/green]" if exists else "[dim]（未生成）[/dim]"
-        # 短いバーで"生成中"を演出
-        _progress_bar(f"  {label:<28}", seconds=0.35)
-        # 完了行を上書き（transientではなくprintで追記）
-        console.print(f"  {label:<28}  {status}")
-        time.sleep(0.05)
-
+    console.print(Rule("[dim]フォーカス（drilldown）[/dim]", style="dim"))
     console.print()
-    console.print(Panel(
-        f"  合計 {len(all_items)} 枚を生成\n"
-        "  俯瞰図 1 枚 ＋ ゾーン詳細 10 枚",
-        title="[bold green]✓ 分割生成完了[/bold green]",
-        expand=False,
-    ))
+    console.print(
+        "  [dim]さらに特定ノード周辺だけを抽出して拡大表示できます:[/dim]"
+    )
+    time.sleep(0.4)
+
+    focus_items = [
+        ("focus-spine-01-1hop.png",          "spine-01  の近傍 1-hop"),
+        ("focus-spine-01-spine-02-1hop.png",  "spine-01 + spine-02  の近傍 1-hop"),
+    ]
+    for fname, label in focus_items:
+        img = cache2 / fname
+        exists_mark = "[green]✓[/green]" if img.exists() else "[dim]—[/dim]"
+        _progress_bar(f"  {label:<38}", seconds=0.3)
+        t = Text()
+        t.append(f"  ")
+        t.append("✓  " if img.exists() else "—  ", style="green" if img.exists() else "dim")
+        t.append(label, style="bold")
+        t.append("  →  ", style="dim")
+        t.append(str(img.relative_to(ROOT)), style="dim")
+        t.truncate(console.width - 2, overflow="ellipsis")
+        console.print(t)
+        time.sleep(0.15)
 
     if open_images:
         _open(cache2 / "overview.png")
-        time.sleep(0.5)
+        time.sleep(0.4)
         _open(cache2 / "zone-dc-fabric.png")
+        time.sleep(0.4)
+        _open(cache2 / "focus-spine-01-1hop.png")
 
 
 # ---------------------------------------------------------------------------
