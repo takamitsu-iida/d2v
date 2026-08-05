@@ -1,0 +1,113 @@
+# デモ用 flawed.yaml: 意図的に設計バグを仕込んだトポロジ
+# validate デモで以下の問題を検出させる:
+#   - spof-device    : fw-01 が単一障害点（fw-01 を除くと core/office が孤立）
+#   - isolated-device: storage-01 が接続なし
+#   - ip-address-overlap: 10.1.1.1/30 を fw-01 と core-sw-01 で重複使用
+network-model:
+  physical-layer:
+    device:
+      - device-id: "router-01"
+        device-name: "Edge Router"
+        device-type: router
+        zone: wan-edge
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To ISP"
+            ip-address: "203.0.113.1/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Firewall"
+            ip-address: "10.1.0.1/30"
+
+      - device-id: "fw-01"
+        device-name: "Edge Firewall"
+        device-type: firewall
+        zone: security
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To Router"
+            ip-address: "10.1.0.2/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Core Switch"
+            ip-address: "10.1.1.1/30"  # ← IP が core-sw-01 側と重複
+
+      - device-id: "core-sw-01"
+        device-name: "Core L3 Switch"
+        device-type: switch
+        zone: core
+        interface:
+          - interface-id: "GigabitEthernet1/0/1"
+            description: "To Firewall"
+            ip-address: "10.1.1.1/30"  # ← IP 重複（fw-01 と同じ /30 内で同一 IP）
+          - interface-id: "GigabitEthernet1/0/2"
+            description: "To Office Switch"
+            ip-address: "10.1.2.1/30"
+
+      - device-id: "office-sw-01"
+        device-name: "Office Switch"
+        device-type: switch
+        zone: office
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Core"
+            ip-address: "10.1.2.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To PC"
+
+      - device-id: "pc-01"
+        device-name: "Client PC"
+        device-type: host
+        zone: office
+        interface:
+          - interface-id: "eth0"
+            description: "LAN"
+            ip-address: "10.2.0.1/24"
+
+      - device-id: "storage-01"
+        device-name: "Storage Server"
+        device-type: server
+        zone: servers
+        interface:
+          - interface-id: "eth0"
+            description: "LAN (接続なし)"
+            ip-address: "10.2.0.10/24"
+        # ← isolated-device: physical-connection に一切登場しない
+
+    physical-connection:
+      - connection-id: "router-01__fw-01"
+        endpoint:
+          - device-id: "router-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/0"
+
+      - connection-id: "fw-01__core-sw-01"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/1"
+
+      - connection-id: "core-sw-01__office-sw-01"
+        endpoint:
+          - device-id: "core-sw-01"
+            interface-id: "GigabitEthernet1/0/2"
+          - device-id: "office-sw-01"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "office-sw-01__pc-01"
+        endpoint:
+          - device-id: "office-sw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "pc-01"
+            interface-id: "eth0"
+
+  layer3-layer:
+    ip-subnet:
+      - subnet-id: "wan-link"
+        prefix: "10.1.0.0/30"
+      - subnet-id: "core-link"
+        prefix: "10.1.1.0/30"
+      - subnet-id: "office-link"
+        prefix: "10.1.2.0/30"
+      - subnet-id: "lan"
+        prefix: "10.2.0.0/24"

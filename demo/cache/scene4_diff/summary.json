@@ -1,0 +1,19 @@
+{
+  "nodes_removed": [
+    "spine-01"
+  ],
+  "edges_removed": [
+    "fw-01__spine-01",
+    "spine-01__leaf-01",
+    "spine-01__leaf-02"
+  ],
+  "nodes_added": [],
+  "edges_added": [],
+  "blast_radius": [
+    "leaf-01",
+    "leaf-02",
+    "server-01",
+    "server-02"
+  ],
+  "blast_radius_count": 4
+}

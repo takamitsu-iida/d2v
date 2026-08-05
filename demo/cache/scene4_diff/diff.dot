@@ -1,0 +1,56 @@
+digraph diff {
+    graph [dpi=150, pad="0.4"];
+    imagepath="/home/iida/git/d2v/src/d2v/assets/icons";
+    node [penwidth=1.6];
+    edge [dir=none];  // 物理リンクは無向（矢じりなし）
+    compound=true; newrank=true; rankdir=TB;
+    graph [fontname="Helvetica,Arial,sans-serif"];
+    node [fontname="Helvetica,Arial,sans-serif", fontsize=10, shape=box, style="filled,rounded"];
+    edge [fontname="Helvetica,Arial,sans-serif", fontsize=8];
+    subgraph cluster_z0 {
+        label="access"; bgcolor="#F8F9FA66"; color="#5F6368"; fontcolor="#3C4043";
+        "leaf-01" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="switch.png" SCALE="TRUE"/></TD></TR><TR><TD>leaf-01</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+        "leaf-02" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="switch.png" SCALE="TRUE"/></TD></TR><TR><TD>leaf-02</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+        "leaf-03" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="switch.png" SCALE="TRUE"/></TD></TR><TR><TD>leaf-03</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+        "leaf-04" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="switch.png" SCALE="TRUE"/></TD></TR><TR><TD>leaf-04</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+    }
+    subgraph cluster_z1 {
+        label="core"; bgcolor="#F8F9FA66"; color="#5F6368"; fontcolor="#3C4043";
+        "spine-01" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="switch.png" SCALE="TRUE"/></TD></TR><TR><TD>spine-01</TD></TR></TABLE>>, fillcolor="#FCE8E6", color="#C5221F", style="filled,rounded,dashed", tooltip="削除"];
+        "spine-02" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="switch.png" SCALE="TRUE"/></TD></TR><TR><TD>spine-02</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+    }
+    subgraph cluster_z2 {
+        label="security"; bgcolor="#F8F9FA66"; color="#5F6368"; fontcolor="#3C4043";
+        "fw-01" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="firewall.png" SCALE="TRUE"/></TD></TR><TR><TD>fw-01</TD></TR><TR><TD><FONT POINT-SIZE="8">(変更: interfaces)</FONT></TD></TR></TABLE>>, fillcolor="#FEF7E0", color="#E37400", style="filled,rounded", tooltip="interfaces: GigabitEthernet0/0, GigabitEthernet0/1, GigabitEthernet0/2→GigabitEthernet0/0, GigabitEthernet0/2"];
+    }
+    subgraph cluster_z3 {
+        label="servers"; bgcolor="#F8F9FA66"; color="#5F6368"; fontcolor="#3C4043";
+        "server-01" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="server.png" SCALE="TRUE"/></TD></TR><TR><TD>server-01</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+        "server-02" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="server.png" SCALE="TRUE"/></TD></TR><TR><TD>server-02</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+        "server-03" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="server.png" SCALE="TRUE"/></TD></TR><TR><TD>server-03</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+        "server-04" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="server.png" SCALE="TRUE"/></TD></TR><TR><TD>server-04</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+    }
+    subgraph cluster_z4 {
+        label="wan-edge"; bgcolor="#F8F9FA66"; color="#5F6368"; fontcolor="#3C4043";
+        "router-01" [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1"><TR><TD FIXEDSIZE="TRUE" WIDTH="26" HEIGHT="26"><IMG SRC="router.png" SCALE="TRUE"/></TD></TR><TR><TD>router-01</TD></TR></TABLE>>, fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded", tooltip="変更なし"];
+    }
+    "fw-01" -> "spine-01" [color="#C5221F", style="dashed", penwidth=2];
+    "fw-01" -> "spine-02" [color="#9AA0A6", style="solid", penwidth=1];
+    "leaf-01" -> "server-01" [color="#9AA0A6", style="solid", penwidth=1];
+    "leaf-02" -> "server-02" [color="#9AA0A6", style="solid", penwidth=1];
+    "leaf-03" -> "server-03" [color="#9AA0A6", style="solid", penwidth=1];
+    "leaf-04" -> "server-04" [color="#9AA0A6", style="solid", penwidth=1];
+    "router-01" -> "fw-01" [color="#9AA0A6", style="solid", penwidth=1];
+    "spine-01" -> "leaf-01" [color="#C5221F", style="dashed", penwidth=2];
+    "spine-01" -> "leaf-02" [color="#C5221F", style="dashed", penwidth=2];
+    "spine-02" -> "leaf-03" [color="#9AA0A6", style="solid", penwidth=1];
+    "spine-02" -> "leaf-04" [color="#9AA0A6", style="solid", penwidth=1];
+    subgraph cluster_legend {
+        label="凡例"; bgcolor="#FFFFFF66"; color="#5F6368"; fontcolor="#3C4043";
+        "legend_add"  [label="追加", fillcolor="#E6F4EA", color="#137333", style="filled,rounded"];
+        "legend_del"  [label="削除", fillcolor="#FCE8E6", color="#C5221F", style="filled,rounded,dashed"];
+        "legend_chg"  [label="変更", fillcolor="#FEF7E0", color="#E37400", style="filled,rounded"];
+        "legend_same" [label="変更なし", fillcolor="#F1F3F4", color="#9AA0A6", style="filled,rounded"];
+        "legend_add" -> "legend_del" -> "legend_chg" -> "legend_same" [style=invis];
+    }
+}

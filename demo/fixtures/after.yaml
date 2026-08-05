@@ -1,0 +1,202 @@
+# デモ用 after.yaml: spine-01 が障害停止した状態
+# before.yaml から spine-01 を除去したトポロジ
+# diff デモ: nodes_removed=[spine-01], edges_removed=[fw-01__spine-01, spine-01__leaf-01, spine-01__leaf-02]
+# blast radius: leaf-01, leaf-02, server-01, server-02 (4台) が到達不能
+network-model:
+  physical-layer:
+    device:
+      - device-id: "router-01"
+        device-name: "Edge Router"
+        device-type: router
+        zone: wan-edge
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To ISP"
+            ip-address: "203.0.113.1/30"
+          - interface-id: "GigabitEthernet0/1"
+            description: "To Firewall"
+            ip-address: "10.0.0.1/30"
+
+      - device-id: "fw-01"
+        device-name: "Edge Firewall"
+        device-type: firewall
+        zone: security
+        interface:
+          - interface-id: "GigabitEthernet0/0"
+            description: "To Router"
+            ip-address: "10.0.0.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Spine-02"
+            ip-address: "10.1.0.5/30"
+
+      # spine-01 は障害停止のためノードごと除去
+
+      - device-id: "spine-02"
+        device-name: "Spine Switch 02"
+        device-type: switch
+        zone: core
+        interface:
+          - interface-id: "GigabitEthernet1/0/1"
+            description: "Uplink to Firewall"
+            ip-address: "10.1.0.6/30"
+          - interface-id: "GigabitEthernet1/0/2"
+            description: "To Leaf-03"
+            ip-address: "10.2.0.9/30"
+          - interface-id: "GigabitEthernet1/0/3"
+            description: "To Leaf-04"
+            ip-address: "10.2.0.13/30"
+
+      - device-id: "leaf-01"
+        device-name: "Leaf Switch 01"
+        device-type: switch
+        zone: access
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Spine-01 (障害)"
+            ip-address: "10.2.0.2/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Server-01"
+
+      - device-id: "leaf-02"
+        device-name: "Leaf Switch 02"
+        device-type: switch
+        zone: access
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Spine-01 (障害)"
+            ip-address: "10.2.0.6/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Server-02"
+
+      - device-id: "leaf-03"
+        device-name: "Leaf Switch 03"
+        device-type: switch
+        zone: access
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Spine-02"
+            ip-address: "10.2.0.10/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Server-03"
+
+      - device-id: "leaf-04"
+        device-name: "Leaf Switch 04"
+        device-type: switch
+        zone: access
+        interface:
+          - interface-id: "GigabitEthernet0/1"
+            description: "Uplink to Spine-02"
+            ip-address: "10.2.0.14/30"
+          - interface-id: "GigabitEthernet0/2"
+            description: "To Server-04"
+
+      - device-id: "server-01"
+        device-name: "App Server 01"
+        device-type: server
+        zone: servers
+        interface:
+          - interface-id: "eth0"
+            description: "LAN"
+            ip-address: "10.3.0.1/24"
+
+      - device-id: "server-02"
+        device-name: "App Server 02"
+        device-type: server
+        zone: servers
+        interface:
+          - interface-id: "eth0"
+            description: "LAN"
+            ip-address: "10.3.0.2/24"
+
+      - device-id: "server-03"
+        device-name: "App Server 03"
+        device-type: server
+        zone: servers
+        interface:
+          - interface-id: "eth0"
+            description: "LAN"
+            ip-address: "10.3.0.3/24"
+
+      - device-id: "server-04"
+        device-name: "App Server 04"
+        device-type: server
+        zone: servers
+        interface:
+          - interface-id: "eth0"
+            description: "LAN"
+            ip-address: "10.3.0.4/24"
+
+    physical-connection:
+      - connection-id: "router-01__fw-01"
+        endpoint:
+          - device-id: "router-01"
+            interface-id: "GigabitEthernet0/1"
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/0"
+
+      # fw-01__spine-01 は除去（spine-01 停止）
+
+      - connection-id: "fw-01__spine-02"
+        endpoint:
+          - device-id: "fw-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "spine-02"
+            interface-id: "GigabitEthernet1/0/1"
+
+      # spine-01__leaf-01 は除去（spine-01 停止）
+      # spine-01__leaf-02 は除去（spine-01 停止）
+
+      - connection-id: "spine-02__leaf-03"
+        endpoint:
+          - device-id: "spine-02"
+            interface-id: "GigabitEthernet1/0/2"
+          - device-id: "leaf-03"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "spine-02__leaf-04"
+        endpoint:
+          - device-id: "spine-02"
+            interface-id: "GigabitEthernet1/0/3"
+          - device-id: "leaf-04"
+            interface-id: "GigabitEthernet0/1"
+
+      - connection-id: "leaf-01__server-01"
+        endpoint:
+          - device-id: "leaf-01"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "server-01"
+            interface-id: "eth0"
+
+      - connection-id: "leaf-02__server-02"
+        endpoint:
+          - device-id: "leaf-02"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "server-02"
+            interface-id: "eth0"
+
+      - connection-id: "leaf-03__server-03"
+        endpoint:
+          - device-id: "leaf-03"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "server-03"
+            interface-id: "eth0"
+
+      - connection-id: "leaf-04__server-04"
+        endpoint:
+          - device-id: "leaf-04"
+            interface-id: "GigabitEthernet0/2"
+          - device-id: "server-04"
+            interface-id: "eth0"
+
+  layer3-layer:
+    ip-subnet:
+      - subnet-id: "wan-link"
+        prefix: "10.0.0.0/30"
+      - subnet-id: "spine02-uplink"
+        prefix: "10.1.0.4/30"
+      - subnet-id: "spine02-leaf03"
+        prefix: "10.2.0.8/30"
+      - subnet-id: "spine02-leaf04"
+        prefix: "10.2.0.12/30"
+      - subnet-id: "servers"
+        prefix: "10.3.0.0/24"

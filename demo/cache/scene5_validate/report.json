@@ -1,0 +1,115 @@
+{
+  "ok": false,
+  "counts": {
+    "error": 1,
+    "warning": 9,
+    "info": 0
+  },
+  "issues": [
+    {
+      "rule": "ip-address-overlap",
+      "severity": "error",
+      "message": "IP アドレス 10.1.1.1 が複数のインターフェースに割り当てられています。",
+      "targets": [
+        "fw-01[GigabitEthernet0/1]",
+        "core-sw-01[GigabitEthernet1/0/1]"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "iface-subnet-mismatch",
+      "severity": "warning",
+      "message": "インターフェース IP 203.0.113.1/30 がどの ip-subnet にも属しません。",
+      "targets": [
+        "router-01[GigabitEthernet0/0]"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "isolated-device",
+      "severity": "warning",
+      "message": "デバイス 'storage-01' はどの接続にも現れない孤立ノードです。",
+      "targets": [
+        "storage-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-device",
+      "severity": "warning",
+      "message": "デバイス 'core-sw-01' は単一障害点（関節点）です。停止すると到達性が分断されます。",
+      "targets": [
+        "core-sw-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-device",
+      "severity": "warning",
+      "message": "デバイス 'fw-01' は単一障害点（関節点）です。停止すると到達性が分断されます。",
+      "targets": [
+        "fw-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-device",
+      "severity": "warning",
+      "message": "デバイス 'office-sw-01' は単一障害点（関節点）です。停止すると到達性が分断されます。",
+      "targets": [
+        "office-sw-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-bridge-link",
+      "severity": "warning",
+      "message": "リンク office-sw-01 <-> pc-01 は橋です。切断すると到達性が分断されます。",
+      "targets": [
+        "office-sw-01",
+        "pc-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-bridge-link",
+      "severity": "warning",
+      "message": "リンク core-sw-01 <-> office-sw-01 は橋です。切断すると到達性が分断されます。",
+      "targets": [
+        "core-sw-01",
+        "office-sw-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-bridge-link",
+      "severity": "warning",
+      "message": "リンク core-sw-01 <-> fw-01 は橋です。切断すると到達性が分断されます。",
+      "targets": [
+        "core-sw-01",
+        "fw-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    },
+    {
+      "rule": "spof-bridge-link",
+      "severity": "warning",
+      "message": "リンク fw-01 <-> router-01 は橋です。切断すると到達性が分断されます。",
+      "targets": [
+        "fw-01",
+        "router-01"
+      ],
+      "explanation": "",
+      "suggestion": ""
+    }
+  ]
+}

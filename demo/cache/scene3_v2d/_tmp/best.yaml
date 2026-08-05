@@ -1,0 +1,96 @@
+network-model:
+  physical-layer:
+    device:
+    - device-id: router-01
+      device-name: router-01
+      device-type: router
+      zone: WAN / Edge
+      loopback: 10.0.0.1/32
+      interface:
+      - interface-id: Gi0/1
+    - device-id: fw-01
+      device-name: fw-01
+      device-type: firewall
+      zone: WAN / Edge
+      loopback: 10.0.0.2/32
+      interface:
+      - interface-id: Gi0/0
+      - interface-id: Gi0/1
+    - device-id: core-sw-01
+      device-name: core-sw-01
+      device-type: switch
+      zone: Core LAN
+      loopback: 10.1.1.1/32
+      interface:
+      - interface-id: Gi0/1
+      - interface-id: Gi0/2
+      - interface-id: Po1 (LAG)
+    - device-id: dmz-sw-01
+      device-name: dmz-sw-01
+      device-type: switch
+      zone: DMZ
+      interface:
+      - interface-id: Gi0/1
+      - interface-id: Gi0/2
+    - device-id: web-server-01
+      device-name: web-server-01
+      device-type: server
+      zone: DMZ
+      interface:
+      - interface-id: Gi0/0
+    - device-id: office-sw-01
+      device-name: office-sw-01
+      device-type: switch
+      zone: Office LAN
+      interface:
+      - interface-id: Gi0/3,Gi0/4,Gi0/5
+      - interface-id: Gi0/1
+    - device-id: pc-01
+      device-name: pc-01
+      device-type: host
+      zone: Office LAN
+      interface:
+      - interface-id: Gi0/0
+    physical-connection:
+    - connection-id: router-01_Gi0/1__fw-01_Gi0/0
+      endpoint:
+      - device-id: router-01
+        interface-id: Gi0/1
+      - device-id: fw-01
+        interface-id: Gi0/0
+    - connection-id: fw-01_Gi0/1__core-sw-01_Gi0/1
+      endpoint:
+      - device-id: fw-01
+        interface-id: Gi0/1
+      - device-id: core-sw-01
+        interface-id: Gi0/1
+    - connection-id: core-sw-01_Gi0/2__dmz-sw-01_Gi0/1
+      endpoint:
+      - device-id: core-sw-01
+        interface-id: Gi0/2
+      - device-id: dmz-sw-01
+        interface-id: Gi0/1
+    - connection-id: core-sw-01_Po1 (LAG)__office-sw-01_Gi0/3,Gi0/4,Gi0/5
+      endpoint:
+      - device-id: core-sw-01
+        interface-id: Po1 (LAG)
+      - device-id: office-sw-01
+        interface-id: Gi0/3,Gi0/4,Gi0/5
+    - connection-id: dmz-sw-01_Gi0/2__web-server-01_Gi0/0
+      endpoint:
+      - device-id: dmz-sw-01
+        interface-id: Gi0/2
+      - device-id: web-server-01
+        interface-id: Gi0/0
+    - connection-id: office-sw-01_Gi0/1__pc-01_Gi0/0
+      endpoint:
+      - device-id: office-sw-01
+        interface-id: Gi0/1
+      - device-id: pc-01
+        interface-id: Gi0/0
+  layer3-layer:
+    ip-subnet:
+    - prefix: 10.1.0.0/30
+    - prefix: 10.1.0.4/30
+    - prefix: 10.1.2.0/24
+    - prefix: 10.1.3.0/24
