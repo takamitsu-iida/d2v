@@ -401,36 +401,143 @@ async function runLint(
 }
 
 // ---------------------------------------------------------------------------
-// 補完（device-id / interface-id）
+// 補完（クロスリファレンス: device-id / interface-id / zone）
 // ---------------------------------------------------------------------------
 
-function collectValues(text: string, key: string): string[] {
-  const re = new RegExp(`${key}\\s*:\\s*"?([A-Za-z0-9_./:\\-]+)`, "g");
-  const seen = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    seen.add(m[1]);
+interface DeviceIndex {
+  /** physical-layer.device で定義された全 device-id（定義順）*/
+  deviceIds: string[];
+  /** device-id → そのデバイスの interface-id 一覧 */
+  interfacesByDevice: Map<string, string[]>;
+  /** 使用中の全 zone 値（ソート済み）*/
+  zones: string[];
+}
+
+/** YAML テキストを行単位で走査して DeviceIndex を構築する。 */
+function buildDeviceIndex(text: string): DeviceIndex {
+  const deviceIds: string[] = [];
+  const interfacesByDevice = new Map<string, string[]>();
+  const zoneSet = new Set<string>();
+
+  let inDeviceList = false;
+  let deviceSectionIndent = -1;
+  let currentDevice: string | null = null;
+  let deviceItemIndent = -1;
+  let inIfaceList = false;
+
+  for (const raw of text.split("\n")) {
+    const trimmed = raw.trimStart();
+    const indent = raw.length - trimmed.length;
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // physical-layer.device: セクションに入る
+    if (trimmed === "device:") {
+      inDeviceList = true;
+      deviceSectionIndent = indent;
+      currentDevice = null;
+      inIfaceList = false;
+      continue;
+    }
+
+    // device: と同レベル以浅のキー（physical-connection: など）でセクションを抜ける
+    if (inDeviceList && indent <= deviceSectionIndent && /^[a-zA-Z-]/.test(trimmed)) {
+      inDeviceList = false;
+      currentDevice = null;
+      inIfaceList = false;
+    }
+
+    if (!inDeviceList) continue;
+
+    // device リストアイテムの先頭行
+    const devM = /^-\s+device-id\s*:\s*"?([^"#\n]+?)"?\s*$/.exec(trimmed);
+    if (devM) {
+      currentDevice = devM[1].trim();
+      deviceItemIndent = indent;
+      inIfaceList = false;
+      if (!interfacesByDevice.has(currentDevice)) {
+        deviceIds.push(currentDevice);
+        interfacesByDevice.set(currentDevice, []);
+      }
+      continue;
+    }
+
+    if (!currentDevice) continue;
+
+    // zone 値を収集
+    const zoneM = /^zone\s*:\s*"?([^"#\n]+?)"?\s*$/.exec(trimmed);
+    if (zoneM) { zoneSet.add(zoneM[1].trim()); continue; }
+
+    // interface リストに入る
+    if (trimmed === "interface:") { inIfaceList = true; continue; }
+
+    // interface-id を収集
+    if (inIfaceList) {
+      const ifM = /^-\s+interface-id\s*:\s*"?([^"#\n]+?)"?\s*$/.exec(trimmed);
+      if (ifM) interfacesByDevice.get(currentDevice)!.push(ifM[1].trim());
+    }
   }
-  return [...seen].sort();
+
+  return { deviceIds, interfacesByDevice, zones: [...zoneSet].sort() };
+}
+
+/**
+ * カーソル行から上に遡り、同一エンドポイントブロック内の device-id 値を返す。
+ * endpoint の外（デバイス定義セクション等）では null を返す。
+ */
+function findSiblingDeviceId(document: vscode.TextDocument, position: vscode.Position): string | null {
+  const curIndent = document.lineAt(position.line).text.search(/\S/);
+  for (let li = position.line - 1; li >= Math.max(0, position.line - 15); li--) {
+    const line = document.lineAt(li).text;
+    if (!line.trim()) continue;
+    const lineIndent = line.search(/\S/);
+    // ブロックの外（2段以上浅い）に出たら終了
+    if (lineIndent < curIndent - 2) break;
+    const m = /^\s*device-id\s*:\s*"?([^"#\n]+?)"?\s*$/.exec(line);
+    if (m) return m[1].trim();
+  }
+  return null;
 }
 
 const completionProvider: vscode.CompletionItemProvider = {
   provideCompletionItems(document, position) {
-    if (!looksLikeTopology(document)) {
-      return undefined;
-    }
+    if (!looksLikeTopology(document)) return undefined;
     const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
-    const keyMatch = /(^|\s|-)\s*(device-id|interface-id)\s*:\s*"?[^"\n]*$/.exec(linePrefix);
-    if (!keyMatch) {
-      return undefined;
+
+    // device-id 補完: physical-layer.device の定義済み ID のみ
+    if (/(^|\s|-)\s*device-id\s*:\s*"?[^"\n]*$/.test(linePrefix)) {
+      const idx = buildDeviceIndex(document.getText());
+      return idx.deviceIds.map((v) => {
+        const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Reference);
+        item.detail = "d2v device-id";
+        return item;
+      });
     }
-    const key = keyMatch[2];
-    const values = collectValues(document.getText(), key);
-    return values.map((v) => {
-      const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Value);
-      item.detail = `d2v ${key}`;
-      return item;
-    });
+
+    // interface-id 補完: 同エンドポイントブロック内の device-id に対応するインターフェースのみ
+    if (/(^|\s|-)\s*interface-id\s*:\s*"?[^"\n]*$/.test(linePrefix)) {
+      const idx = buildDeviceIndex(document.getText());
+      const sibDev = findSiblingDeviceId(document, position);
+      const candidates = sibDev
+        ? (idx.interfacesByDevice.get(sibDev) ?? [])
+        : [...idx.interfacesByDevice.values()].flat();
+      return [...new Set(candidates)].map((v) => {
+        const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Value);
+        item.detail = sibDev ? `d2v ${sibDev}` : "d2v interface-id";
+        return item;
+      });
+    }
+
+    // zone 補完: ドキュメント内の既存 zone 値
+    if (/(?:^|\s)zone\s*:\s*"?[^"\n]*$/.test(linePrefix)) {
+      const idx = buildDeviceIndex(document.getText());
+      return idx.zones.map((v) => {
+        const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.Value);
+        item.detail = "d2v zone";
+        return item;
+      });
+    }
+
+    return undefined;
   },
 };
 
@@ -550,6 +657,7 @@ function buildYangCompletionProvider(
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
   let debounce: NodeJS.Timeout | undefined;
+  let lintDebounce: NodeJS.Timeout | undefined;
 
   const scheduleUpdate = () => {
     const panel = FocusPreviewPanel.current;
@@ -584,6 +692,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const lint = (doc: vscode.TextDocument) =>
     void runLint(doc, lintCollection).then(updateLintAtCursor);
+
+  const scheduleLint = (doc: vscode.TextDocument) => {
+    if (!vscode.workspace.getConfiguration("d2v").get("lint.enable", true)) return;
+    const delay = Number(vscode.workspace.getConfiguration("d2v").get("lint.debounceMs", 1000));
+    if (lintDebounce) clearTimeout(lintDebounce);
+    lintDebounce = setTimeout(() => lint(doc), delay);
+  };
 
   context.subscriptions.push(
     vscode.commands.registerCommand("d2v.startServer", () => {
@@ -696,6 +811,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const active = vscode.window.activeTextEditor;
       if (active && e.document === active.document && looksLikeTopology(e.document)) {
         scheduleUpdate();
+        scheduleLint(e.document);
       }
     }),
     vscode.window.onDidChangeActiveTextEditor(() => {
