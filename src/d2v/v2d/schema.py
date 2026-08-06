@@ -27,6 +27,13 @@ DeviceType = Literal[
 EdgeStyle = Literal["solid", "dashed", "unknown"]
 
 
+class ExtractedInterface(BaseModel):
+    """ポート単位のインターフェース情報。"""
+
+    id: str = Field(description="インターフェース名（例: Gi0/1）")
+    ip_address: str | None = Field(default=None, description="このポートに付与された IP アドレス（例: 192.168.1.1/24）")
+
+
 class ExtractedNode(BaseModel):
     """検出したノード（デバイス）。"""
 
@@ -35,6 +42,7 @@ class ExtractedNode(BaseModel):
     device_type: DeviceType = Field(default="unknown", description="アイコン/形状/語からの推定種別")
     zone: str | None = Field(default=None, description="所属ゾーン名（クラスタ由来）")
     loopback: str | None = Field(default=None, description="管理 IP / loopback（読み取れれば）")
+    interfaces: list[ExtractedInterface] = Field(default_factory=list, description="ポート横に書かれたインターフェース単位の IP")
     raw_label: str | None = Field(default=None, description="認識した生ラベル（改行含む）")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 

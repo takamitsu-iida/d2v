@@ -274,6 +274,9 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 13px;
 }
 .dropzone.drag { border-color: var(--accent); background: var(--panel-2); }
+.dropzone.paste-flash { border-color: var(--accent); background: var(--panel-2); transition: none; }
+.dropzone .paste-hint { margin: 8px 0 4px; font-size: 12px; }
+#v2d-paste-btn { margin-top: 2px; }
 .dropzone input[type="file"] { margin-top: 8px; }
 #v2d-preview {
   max-width: 100%;

@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from d2v.v2d.schema import ExtractedDiagram, ExtractedNode
+from d2v.v2d.schema import ExtractedDiagram, ExtractedInterface, ExtractedNode
 
 _YamlDict = dict[str, Any]
 
@@ -58,8 +58,10 @@ def build_model(diagram: ExtractedDiagram) -> _YamlDict:
     did_map = _device_id_map(diagram)
 
     # ノード id → インターフェース（interface-id → ip-address）を集約
+    # node.interfaces に記載された IP を先に登録し、エッジ処理で上書きしない
     interfaces: dict[str, "OrderedDict[str, str | None]"] = {
-        n.id: OrderedDict() for n in diagram.nodes
+        n.id: OrderedDict({iface.id: iface.ip_address for iface in n.interfaces})
+        for n in diagram.nodes
     }
     iface_counter: dict[str, int] = {n.id: 0 for n in diagram.nodes}
 

@@ -169,8 +169,10 @@
             <fieldset>
               <legend>入力画像</legend>
               <div class="dropzone" id="v2d-dropzone">
-                <p>ここに画像をドラッグ＆ドロップ<br />または</p>
+                <p>ここに画像をドラッグ＆ドロップまたはファイル選択</p>
                 <input type="file" id="v2d-file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" />
+                <p class="paste-hint">またはクリップボードから貼り付け</p>
+                <button type="button" id="v2d-paste-btn" class="ghost-btn">📋 画像を貼り付け (Ctrl+V)</button>
                 <img id="v2d-preview" alt="プレビュー" hidden />
               </div>
             </fieldset>

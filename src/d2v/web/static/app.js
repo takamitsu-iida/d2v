@@ -480,6 +480,28 @@ function initV2d() {
     if (f) setV2dFile(f);
   });
 
+  // ボタン小クリック→非同期 Clipboard API（PowerPoint 等外部アプリに有効）
+  document.getElementById("v2d-paste-btn").addEventListener("click", () => pasteFromClipboard(dz));
+
+  // Ctrl+V フォールバック（同期 clipboardData で取れた場合のみ）
+  document.addEventListener("paste", (e) => {
+    if (document.getElementById("panel-v2d").hidden) return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const blob = item.getAsFile();
+        if (blob) {
+          const ext = item.type === "image/jpeg" ? "jpg" : "png";
+          setV2dFile(new File([blob], `clipboard.${ext}`, { type: item.type }));
+          flashDropzone(dz);
+          e.preventDefault();
+        }
+        break;
+      }
+    }
+  });
+
   document.querySelectorAll(".vdtab").forEach((b) =>
     b.addEventListener("click", () => {
       V2D_DETAIL = b.dataset.v;
@@ -496,6 +518,39 @@ function setV2dFile(file) {
   const img = document.getElementById("v2d-preview");
   img.src = URL.createObjectURL(file);
   img.hidden = false;
+}
+
+async function pasteFromClipboard(dz) {
+  if (!navigator.clipboard || !navigator.clipboard.read) {
+    alert("クリップボード API が利用できません。HTTPSまたは localhost で開くか、Ctrl+V をお試しください。");
+    return;
+  }
+  try {
+    const clipItems = await navigator.clipboard.read();
+    for (const item of clipItems) {
+      for (const type of ["image/png", "image/jpeg", "image/gif", "image/webp"]) {
+        if (item.types.includes(type)) {
+          const blob = await item.getType(type);
+          const ext = type === "image/jpeg" ? "jpg" : type.split("/")[1];
+          setV2dFile(new File([blob], `clipboard.${ext}`, { type }));
+          flashDropzone(dz);
+          return;
+        }
+      }
+    }
+    alert("クリップボードに画像が見つかりません。PowerPoint で画像を選択してから Ctrl+C してください。");
+  } catch (err) {
+    if (err.name === "NotAllowedError") {
+      alert("クリップボードへのアクセスが拒否されました。ブラウザのアドレスバー左の鍵アイコンから「クリップボード」を許可してください。");
+    } else {
+      alert(`貼り付け失敗: ${err.message}`);
+    }
+  }
+}
+
+function flashDropzone(dz) {
+  dz.classList.add("paste-flash");
+  setTimeout(() => dz.classList.remove("paste-flash"), 600);
 }
 
 async function submitV2dJob(ev) {
