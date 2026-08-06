@@ -1,0 +1,95 @@
+submodule iida-network-model-mgmt {
+  yang-version 1.1;
+  belongs-to iida-network-model {
+    prefix "nnm";
+  }
+
+  import ietf-inet-types {
+    prefix "inet";
+  }
+
+  description
+    "Management plane definitions: management VLAN, per-device management
+     IP/gateway, in-band interface, management loopback, and out-of-band access.";
+
+  // ===========================================================================
+  // Management Plane
+  // ===========================================================================
+  grouping management-group {
+    container management {
+      description
+        "Management-plane configuration used for reaching and operating devices:
+         in-band and out-of-band management interfaces, management VLAN, and
+         management/monitoring loopbacks.";
+
+      leaf management-vlan {
+        type leafref {
+          path "../../layer2-layer/vlan/vlan-id";
+        }
+        description "Global VLAN used for in-band management traffic.";
+      }
+
+      list device-management {
+        key "device-id";
+        description "Per-device management-plane settings.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device these management settings apply to.";
+        }
+        leaf management-ip-address {
+          type inet:ip-address;
+          description "Primary management IP address of the device.";
+        }
+        leaf management-prefix-length {
+          type uint8 {
+            range "0..128";
+          }
+          description "Prefix length for the management IP (0..32 IPv4, 0..128 IPv6).";
+        }
+        leaf management-gateway {
+          type inet:ip-address;
+          description "Default gateway used by the management interface.";
+        }
+        leaf in-band-interface-id {
+          type leafref {
+            path "../../../physical-layer/device[device-id=current()/../device-id]/interface/interface-id";
+          }
+          description "In-band management interface (e.g., a routed SVI) on this device.";
+        }
+        leaf management-loopback {
+          type inet:ip-prefix;
+          description "Loopback dedicated to management/monitoring reachability.";
+        }
+        container out-of-band {
+          description "Dedicated out-of-band (OOB) management access.";
+          leaf enabled {
+            type boolean;
+            default "false";
+            description "Whether a dedicated OOB management path exists.";
+          }
+          leaf interface-id {
+            when "../enabled = 'true'";
+            type leafref {
+              path "../../../../physical-layer/device[device-id=current()/../../device-id]/interface/interface-id";
+            }
+            description "Dedicated OOB management interface on this device.";
+          }
+          leaf ip-address {
+            when "../enabled = 'true'";
+            type inet:ip-address;
+            description "IP address assigned to the OOB management interface.";
+          }
+          leaf prefix-length {
+            when "../enabled = 'true'";
+            type uint8 {
+              range "0..128";
+            }
+            description "Prefix length for the OOB management IP.";
+          }
+        }
+      }
+    } // end management
+  } // end management-group
+}

@@ -1,0 +1,168 @@
+submodule iida-network-model-l2 {
+  yang-version 1.1;
+  belongs-to iida-network-model {
+    prefix "nnm";
+  }
+
+  description
+    "Layer 2 definitions: VLANs, link aggregation, and L2 interface configuration.";
+
+  // ===========================================================================
+  // Layer 2
+  // ===========================================================================
+  grouping layer2-layer-group {
+    container layer2-layer {
+      description "Details about VLANs and Layer 2 configurations.";
+
+      list vlan {
+        key "vlan-id";
+        description "Definition of VLANs configured in the network.";
+        leaf vlan-id {
+          type uint16 {
+            range "1..4094";
+          }
+          description "VLAN identifier.";
+        }
+        leaf name {
+          type string;
+          description "Human-readable name for the VLAN.";
+        }
+      }
+
+      list layer2-interface-config {
+        key "device-id interface-id";
+        description "Layer 2 configuration for a specific interface on a device.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Reference to the physical device.";
+        }
+        leaf interface-id {
+          type leafref {
+            path "../../../physical-layer/device[device-id=current()/../device-id]/interface/interface-id";
+          }
+          description "Reference to the physical interface on that device.";
+        }
+        leaf l2-mode {
+          type enumeration {
+            enum "access";
+            enum "trunk";
+            enum "layer3"; // Interface configured for L3 routing, no L2 switching
+          }
+          description "Layer 2 mode of the interface.";
+        }
+        leaf access-vlan {
+          when "../l2-mode = 'access'" {
+            description "Required for access mode.";
+          }
+          type leafref {
+            path "../../vlan/vlan-id";
+          }
+          mandatory true;
+          description "VLAN ID for access ports.";
+        }
+        list trunk-vlans {
+          when "../l2-mode = 'trunk'" {
+            description "List of allowed VLAN IDs for trunk ports.";
+          }
+          key "vlan-id";
+          leaf vlan-id {
+            type leafref {
+              path "../../../vlan/vlan-id";
+            }
+            description "VLAN ID allowed on this trunk.";
+          }
+        }
+        leaf native-vlan {
+          when "../l2-mode = 'trunk'";
+          type leafref {
+            path "../../vlan/vlan-id";
+          }
+          description "Native VLAN ID for trunk ports.";
+        }
+      }
+
+      list link-aggregation {
+        key "device-id lag-id";
+        description
+          "Link aggregation groups (LAG/LACP) bundling multiple physical
+           member interfaces into one logical link. Optionally extended to a
+           multi-chassis LAG (MLAG/vPC/MC-LAG) spanning two devices.";
+        leaf device-id {
+          type leafref {
+            path "../../../physical-layer/device/device-id";
+          }
+          description "Device on which this aggregation group is configured.";
+        }
+        leaf lag-id {
+          type string {
+            pattern '[a-zA-Z0-9_./-]+';
+            length "1..128";
+          }
+          description "Logical aggregate interface identifier (e.g., Po1, ae0, bond0).";
+        }
+        leaf mode {
+          type enumeration {
+            enum "static";        // Manual/static bundling (no LACP)
+            enum "lacp-active";   // LACP, actively initiates
+            enum "lacp-passive";  // LACP, responds only
+          }
+          description "Aggregation mode.";
+        }
+        leaf lacp-rate {
+          when "../mode = 'lacp-active' or ../mode = 'lacp-passive'";
+          type enumeration {
+            enum "slow"; // 30s
+            enum "fast"; // 1s
+          }
+          description "LACPDU transmit rate (only meaningful for LACP modes).";
+        }
+        leaf min-links {
+          type uint16;
+          description "Minimum number of active member links to keep the bundle up.";
+        }
+        list member-interface {
+          key "interface-id";
+          description "Physical interfaces that are members of this aggregate.";
+          leaf interface-id {
+            type leafref {
+              path "../../../../physical-layer/device[device-id=current()/../../device-id]/interface/interface-id";
+            }
+            description "Member physical interface on the aggregation device.";
+          }
+        }
+        container mlag {
+          description "Multi-chassis LAG (MLAG/vPC/MC-LAG) peering settings.";
+          leaf enabled {
+            type boolean;
+            default "false";
+            description "Whether this aggregate participates in a multi-chassis LAG.";
+          }
+          leaf domain-id {
+            when "../enabled = 'true'";
+            type string {
+              length "1..64";
+            }
+            description "MLAG/vPC domain identifier shared by the peer pair.";
+          }
+          leaf peer-device-id {
+            when "../enabled = 'true'";
+            type leafref {
+              path "../../../../physical-layer/device/device-id";
+            }
+            description "Peer device forming the multi-chassis pair.";
+          }
+          leaf peer-lag-id {
+            when "../enabled = 'true'";
+            type string {
+              pattern '[a-zA-Z0-9_./-]+';
+              length "1..128";
+            }
+            description "Corresponding aggregate interface id on the peer device.";
+          }
+        }
+      }
+    } // end layer2-layer
+  } // end layer2-layer-group
+}

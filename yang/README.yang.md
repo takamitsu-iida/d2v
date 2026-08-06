@@ -7,7 +7,7 @@
 - **Namespace**: `urn:iida:params:xml:ns:yang:iida-network-model`
 - **Prefix**: `nnm`
 - **YANG バージョン**: 1.1
-- **検証コマンド**: `python3 -m pyang --strict yang/iida-network-model.yang`
+- **検証コマンド**: `python3 -m pyang --strict -p yang yang/iida-network-model.yang`
 
 ### 依存モジュール
 
@@ -275,6 +275,145 @@ LAG (Link Aggregation Group) を表します。`mode` で static/LACP を選択�
 | 2026-07-17   | IPv6 対応 (`inet:ip-address`/`ip-prefix` へ一般化)、LAG/MLAG 追加、VRRP/HSRP/GLBP 追加、BGP/OSPF/再配送追加、`management` コンテナ追加、`port-type` ラベル修正 |
 | 2026-07-01   | `device` に `asn`/`loopback` 追加、`interface` に `ip-address` 追加、`physical-connection` エンドポイントをリスト化 (IP CLOS 対応)                             |
 | 2023-11-20   | 初版 (OpenConfig 的構造を参考に作成)                                                                                                                          |
+
+---
+
+## モジュール分割計画 (Modularization Plan)
+
+### 背景
+
+現状の `iida-network-model.yang`（892行）は単一ファイルに全定義が集約されており、
+ACL・QoS・NAT など新機能を追加するたびに可読性とメンテナンス性が低下する。
+YANG 1.1 の **サブモジュール** と **独立モジュール＋augment** を組み合わせ、
+必要な機能だけを選択的に取り込める構造へ移行する。
+
+---
+
+### 設計方針
+
+YANG の分割メカニズムを用途別に使い分ける。
+
+| メカニズム | キーワード | 名前空間 | 適用基準 |
+|---|---|---|---|
+| **サブモジュール** | `belongs-to` / `include` | 共有（親と同一） | コアトポロジーの一部。leafref が他層と相互依存する定義 |
+| **独立モジュール** | `import` / `augment` | 独立 | オプション機能。プロジェクトによって使ったり使わなかったりするポリシー・サービス定義 |
+
+---
+
+### ファイル構成（移行後）
+
+```
+yang/
+├── iida-network-model.yang              # メインモジュール（include 宣言と top-level container のみ）
+│
+├── # ── サブモジュール（belongs-to iida-network-model）────────────────
+├── iida-network-model-physical.yang     # 物理層: device, interface, physical-connection
+├── iida-network-model-l2.yang           # L2: vlan, link-aggregation, layer2-interface-config
+├── iida-network-model-l3.yang           # L3: ip-subnet, layer3-interface-config, routing-config,
+│                                        #     host-config, static-route, first-hop-redundancy, route-policy
+├── iida-network-model-mgmt.yang         # 管理プレーン: management-vlan, device-management, OOB
+│
+└── # ── 独立モジュール（augment でコアモデルへ拡張）─────────────────
+    iida-network-acl.yang                # ACL: アクセスリスト・通信フィルタ（任意）
+    iida-network-qos.yang                # QoS: 帯域制御・ポリシーマップ（任意）
+    iida-network-nat.yang                # NAT: アドレス変換・PAT（任意）
+```
+
+---
+
+### 各ファイルの責務と augment ターゲット
+
+#### サブモジュール
+
+| ファイル | 主な定義 | leafref の参照先 |
+|---|---|---|
+| `iida-network-model-physical.yang` | `grouping device-identification`, `grouping interface-identification`, `physical-layer` container | — |
+| `iida-network-model-l2.yang` | `layer2-layer` container (vlan, link-aggregation, layer2-interface-config) | `physical-layer/device` |
+| `iida-network-model-l3.yang` | `layer3-layer` container (ip-subnet, routing-config, route-policy, FHR, static-route) | `physical-layer/device`, `layer2-layer/vlan` |
+| `iida-network-model-mgmt.yang` | `management` container | `physical-layer/device`, `layer2-layer/vlan` |
+
+#### 独立モジュール
+
+| ファイル | augment ターゲット | 主な定義 |
+|---|---|---|
+| `iida-network-acl.yang` | `.../layer3-interface-config` | ACL 名・ACE（permit/deny、src/dst prefix、プロトコル）、ingress/egress 適用 |
+| `iida-network-qos.yang` | `.../layer3-interface-config`, `.../device` | ポリシーマップ、クラスマップ、シェーピング/ポリシング、マーキング |
+| `iida-network-nat.yang` | `.../device`, `.../layer3-interface-config` | NAT プール、スタティック NAT、ダイナミック NAT、PAT、inside/outside 指定 |
+
+---
+
+### 実装ステップ
+
+#### Phase 1 — 既存モデルのサブモジュール分割（リファクタリング）
+
+1. `iida-network-model-physical.yang` を作成し、`grouping` 定義と `physical-layer` container を移動
+2. `iida-network-model-l2.yang` を作成し、`layer2-layer` container を移動
+3. `iida-network-model-l3.yang` を作成し、`layer3-layer` container を移動
+4. `iida-network-model-mgmt.yang` を作成し、`management` container を移動
+5. メインモジュールを `include` 宣言と空の `network-model` container のみに精簡
+6. `pyang --strict` で全サブモジュールを一括検証しエラーがないことを確認
+
+> **注意**: サブモジュール間の leafref はサブモジュールが import なしに親モジュールのスコープを共有するため、
+> パスの書き方は変わらない。
+
+#### Phase 2 — 独立拡張モジュールの新規作成
+
+1. `iida-network-acl.yang` を作成（ACL 定義 + `augment` でインタフェースに適用ポイントを追加）
+2. `iida-network-qos.yang` を作成（QoS ポリシー + `augment`）
+3. `iida-network-nat.yang` を作成（NAT プール/エントリ + `augment`）
+4. 各モジュールを単体・組み合わせで `pyang` 検証
+
+---
+
+### 検証コマンド（移行後）
+
+```bash
+# -p yang でサブモジュールの検索パスを指定する（必須）
+
+# コアのみ
+python3 -m pyang --strict -p yang yang/iida-network-model.yang
+
+# ACL 拡張込み
+python3 -m pyang --strict -p yang yang/iida-network-model.yang yang/iida-network-acl.yang
+
+# 全モジュール一括
+python3 -m pyang --strict -p yang yang/iida-network-model.yang \
+    yang/iida-network-acl.yang \
+    yang/iida-network-qos.yang \
+    yang/iida-network-nat.yang
+
+# ツリー表示（全モジュール展開）
+python3 -m pyang -f tree -p yang yang/iida-network-model.yang \
+    yang/iida-network-acl.yang \
+    yang/iida-network-qos.yang \
+    yang/iida-network-nat.yang
+```
+
+---
+
+### 進捗管理
+
+凡例: `[ ]` TODO / `[~]` IN-PROGRESS / `[x]` DONE
+
+#### Phase 1 — サブモジュール分割
+
+| # | タスク | 状態 |
+|---|---|---|
+| 1-1 | `iida-network-model-physical.yang` 作成（grouping + physical-layer） | [x] |
+| 1-2 | `iida-network-model-l2.yang` 作成（layer2-layer） | [x] |
+| 1-3 | `iida-network-model-l3.yang` 作成（layer3-layer） | [x] |
+| 1-4 | `iida-network-model-mgmt.yang` 作成（management） | [x] |
+| 1-5 | メインモジュールを include 宣言のみに精簡 | [x] |
+| 1-6 | `pyang --strict` で全サブモジュール検証 | [x] |
+
+#### Phase 2 — 独立拡張モジュール
+
+| # | タスク | 状態 |
+|---|---|---|
+| 2-1 | `iida-network-acl.yang` 作成（ACL + augment） | [x] |
+| 2-2 | `iida-network-qos.yang` 作成（QoS + augment） | [x] |
+| 2-3 | `iida-network-nat.yang` 作成（NAT + augment） | [x] |
+| 2-4 | 各拡張モジュールの pyang 検証 | [x] |
 
 ---
 
