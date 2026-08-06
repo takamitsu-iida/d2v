@@ -498,13 +498,18 @@ class FocusPreviewHandler:
             focus_ids = res.focus_ids
             context = res.context
             device_lines = res.device_lines
+        spans_raw, device_lines_parsed = edit_assist._parse_spans(text)
         if not device_lines:
-            _, device_lines = edit_assist._parse_spans(text)
+            device_lines = device_lines_parsed
 
         base: dict = {
             "svg": None, "focus": focus_ids, "context": context,
             "hops": hops, "device_lines": device_lines,
             "not_found": [], "message": None,
+            "spans": [
+                {"start": s.start + 1, "end": s.end, "focus_ids": s.focus_ids}
+                for s in spans_raw
+            ],
         }
         if not focus_ids:
             base["message"] = "注目ノードを特定できませんでした。"

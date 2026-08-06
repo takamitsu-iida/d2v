@@ -1,4 +1,14 @@
 import * as vscode from "vscode";
+import * as path from "path";
+import * as fs from "fs";
+import { loadYangSchema, YangSchema } from "./yangParser";
+
+/** device / connection ブロックの行範囲と focus_ids。 */
+interface FocusSpan {
+  start: number;      // 1-based, inclusive
+  end: number;        // 1-based, inclusive
+  focus_ids: string[];
+}
 
 /** /api/focus/preview のレスポンス。 */
 interface FocusPreviewResponse {
@@ -9,6 +19,7 @@ interface FocusPreviewResponse {
   device_lines: Record<string, number>;
   not_found: string[];
   message: string | null;
+  spans?: FocusSpan[];
 }
 
 /** iida-network-model YAML かどうかを緩く判定する。 */
@@ -28,6 +39,14 @@ class FocusPreviewPanel {
   private deviceLines: Record<string, number> = {};
   /** 追従対象のエディタ（プレビューを開いたときのアクティブ YAML）。 */
   private sourceUri: vscode.Uri | undefined;
+  /** 直前の API 呼び出し時の YAML テキスト（同一ブロック判定用）。 */
+  private lastYamlText: string = "";
+  /** 直前の API 呼び出し時の hops 設定。 */
+  private lastHops: number = -1;
+  /** 直前の API レスポンスの spans（ブロック行範囲＋focus_ids）。 */
+  private lastSpans: FocusSpan[] = [];
+  /** 直前の API 呼び出し時の focus（ソート済み join、スキップ判定用）。 */
+  private lastFocus: string = "";
 
   static createOrShow(context: vscode.ExtensionContext): FocusPreviewPanel {
     const column = vscode.ViewColumn.Beside;
@@ -132,6 +151,27 @@ class FocusPreviewPanel {
     const line = editor.selection.active.line + 1; // 1 始まり
     const yamlText = editor.document.getText();
 
+    // 同じブロック内でのカーソル移動は SVG 再生成をスキップ
+    if (
+      this.lastYamlText !== "" &&
+      yamlText === this.lastYamlText &&
+      hops === this.lastHops &&
+      this.lastSpans.length > 0
+    ) {
+      // サーバーの resolve_focus と同じ 2 段階ロジック:
+      // 1) カーソルを含むスパン、2) 直上フォールバック
+      let span = this.lastSpans.find(s => s.start <= line && line <= s.end);
+      if (!span) {
+        const above = this.lastSpans.filter(s => s.start <= line);
+        if (above.length > 0) {
+          span = above.reduce((best, s) => s.start > best.start ? s : best);
+        }
+      }
+      if (span && [...span.focus_ids].sort().join(",") === this.lastFocus) {
+        return;
+      }
+    }
+
     this.post({ type: "loading", hops });
 
     let res: FocusPreviewResponse;
@@ -152,14 +192,30 @@ class FocusPreviewPanel {
       }
       res = (await r.json()) as FocusPreviewResponse;
     } catch (e) {
-      this.post({
-        type: "error",
-        message: `d2v serve に接続できません（${serverUrl}）。\n\`python main.py serve\` を起動してください。`,
-      });
+      this.post({ type: "error", message: `d2v serve に接続できません（${serverUrl}）。` });
+      if (!serverUnreachableNotified) {
+        serverUnreachableNotified = true;
+        vscode.window.showWarningMessage(
+          `d2v: サーバーに接続できません（${serverUrl}）`,
+          "サーバーを起動",
+          "設定を確認"
+        ).then((action) => {
+          if (action === "サーバーを起動") {
+            void vscode.commands.executeCommand("d2v.startServer");
+          } else if (action === "設定を確認") {
+            void vscode.commands.executeCommand("workbench.action.openSettings", "d2v.serverUrl");
+          }
+        });
+      }
       return;
     }
 
     this.deviceLines = res.device_lines ?? {};
+    this.lastSpans = res.spans ?? [];
+    this.lastFocus = [...res.focus].sort().join(",");
+    this.lastYamlText = yamlText;
+    this.lastHops = hops;
+    serverUnreachableNotified = false;
     this.post({ type: "preview", data: res });
   }
 
@@ -247,6 +303,8 @@ interface LintIssue {
 
 /** 抑制情報の保存先（ワークスペース単位）。activate で設定する。 */
 let extensionContext: vscode.ExtensionContext | undefined;
+/** サーバー未起動通知済みフラグ（セッション内で1回のみ表示）。 */
+let serverUnreachableNotified = false;
 const SUPPRESS_STATE_KEY = "d2v.suppressedLints";
 
 /** diagnostic から元の LintIssue を引くための対応表（Quick Fix 用）。 */
@@ -404,6 +462,91 @@ const lintCodeActionProvider: vscode.CodeActionProvider = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// YANG スキーマを使った YAML キー補完・列挙値補完
+// ---------------------------------------------------------------------------
+
+function buildYangCompletionProvider(
+  schemaRef: { schema: YangSchema | null }
+): vscode.CompletionItemProvider {
+  return {
+    provideCompletionItems(document, position) {
+      const schema = schemaRef.schema;
+      if (!schema || !looksLikeTopology(document)) return undefined;
+
+      const lineText = document.lineAt(position.line).text;
+      const before = lineText.slice(0, position.character);
+
+      // 値補完: 行に「key: 」があってカーソルがその後ろにある場合
+      const valueM = /^(\s*)(?:-\s+)?([a-zA-Z0-9_-]+)\s*:\s*[^#\n]*$/.exec(before);
+      // キー補完: コロンなし、インデントと部分的なキー名のみ
+      const isKeyCompletion =
+        !valueM && /^(\s*)(?:-\s+)?[a-zA-Z0-9_-]*$/.test(before);
+
+      if (!valueM && !isKeyCompletion) return undefined;
+
+      // カレント行のコンテンツインデントを計算
+      let curIndent: number;
+      if (valueM) {
+        const hasDash = /^\s*-\s+/.test(before);
+        curIndent = valueM[1].length + (hasDash ? 2 : 0);
+      } else {
+        const dashM = /^(\s*)-\s+/.exec(lineText);
+        const spaceM = /^(\s*)/.exec(lineText);
+        curIndent = dashM ? dashM[1].length + 2 : spaceM ? spaceM[1].length : 0;
+      }
+
+      // 上方向へ歩いて YANG パスを構築
+      const parts: string[] = [];
+      let trackIndent = curIndent;
+      if (valueM) parts.unshift(valueM[2]); // 現在のキーをパスの末尾に追加
+
+      for (let li = position.line - 1; li >= 0 && trackIndent > 0; li--) {
+        const l = document.lineAt(li).text;
+        if (!l.trim()) continue;
+
+        const listM = /^(\s*)-\s+([a-zA-Z0-9_-]+)\s*:/.exec(l);
+        const mapM = /^(\s*)([a-zA-Z0-9_-]+)\s*:/.exec(l);
+        const lineKey = listM ? listM[2] : mapM ? mapM[2] : undefined;
+        const lineIndent = listM
+          ? listM[1].length + 2
+          : mapM
+          ? mapM[1].length
+          : Infinity;
+
+        if (lineKey && lineIndent < trackIndent) {
+          parts.unshift(lineKey);
+          trackIndent = lineIndent;
+        }
+      }
+
+      const yangPath = parts.join("/");
+
+      if (valueM) {
+        // 列挙値の補完
+        const vals = schema.enums.get(yangPath);
+        if (!vals?.length) return undefined;
+        return vals.map((v) => {
+          const item = new vscode.CompletionItem(v, vscode.CompletionItemKind.EnumMember);
+          item.detail = `YANG enum`;
+          return item;
+        });
+      } else {
+        // キー名の補完
+        const kids = schema.children.get(yangPath);
+        if (!kids?.length) return undefined;
+        return kids.map((name) => {
+          const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Field);
+          item.detail = `YANG`;
+          const desc = schema.descriptions.get(yangPath ? `${yangPath}/${name}` : name);
+          if (desc) item.documentation = new vscode.MarkdownString(desc);
+          return item;
+        });
+      }
+    },
+  };
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   extensionContext = context;
   let debounce: NodeJS.Timeout | undefined;
@@ -443,6 +586,25 @@ export function activate(context: vscode.ExtensionContext): void {
     void runLint(doc, lintCollection).then(updateLintAtCursor);
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("d2v.startServer", () => {
+      const cfg = vscode.workspace.getConfiguration("d2v");
+      const cmd = String(cfg.get("serverCommand", "uv run python main.py serve"));
+      // workspace が editor/ サブディレクトリの場合も main.py を辿って repo root を探す
+      const wsPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      let cwd = wsPath;
+      if (wsPath) {
+        let dir = wsPath;
+        for (let i = 0; i < 4; i++) {
+          if (fs.existsSync(path.join(dir, "main.py"))) { cwd = dir; break; }
+          const parent = path.dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
+        }
+      }
+      const terminal = vscode.window.createTerminal({ name: "d2v serve", cwd });
+      terminal.sendText(cmd);
+      terminal.show();
+    }),
     vscode.commands.registerCommand("d2v.openFocusPreview", () => {
       const panel = FocusPreviewPanel.createOrShow(context);
       panel.refreshFromActiveEditor();
@@ -537,6 +699,12 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.window.onDidChangeActiveTextEditor(() => {
+      if (vscode.workspace.getConfiguration("d2v").get("autoOpenPreview", false)) {
+        const doc = vscode.window.activeTextEditor?.document;
+        if (doc && looksLikeTopology(doc) && !FocusPreviewPanel.current) {
+          FocusPreviewPanel.createOrShow(context).refreshFromActiveEditor();
+        }
+      }
       updateLintAtCursor();
       scheduleUpdate();
     }),
@@ -554,9 +722,46 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  // YANG スキーマ読み込みと列挙値・キー補完プロバイダの登録
+  const schemaRef: { schema: YangSchema | null } = { schema: null };
+  const wsFolder = vscode.workspace.workspaceFolders?.[0];
+  if (wsFolder) {
+    const yangDir = path.join(wsFolder.uri.fsPath, "yang");
+    const tryLoad = () => {
+      try {
+        schemaRef.schema = loadYangSchema(yangDir);
+      } catch {
+        /* yang/ が存在しない場合は無視 */
+      }
+    };
+    tryLoad();
+    const yangWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(wsFolder, "yang/*.yang")
+    );
+    yangWatcher.onDidChange(tryLoad);
+    yangWatcher.onDidCreate(tryLoad);
+    yangWatcher.onDidDelete(tryLoad);
+    context.subscriptions.push(
+      yangWatcher,
+      vscode.languages.registerCompletionItemProvider(
+        { language: "yaml" },
+        buildYangCompletionProvider(schemaRef),
+        " ",
+        ":"
+      )
+    );
+  }
+
   // 起動時にアクティブな YAML を一度 lint する
   if (vscode.window.activeTextEditor) {
     lint(vscode.window.activeTextEditor.document);
+  }
+  // autoOpenPreview: 起動時に既に topology YAML が開いていれば自動でプレビューを開く
+  if (vscode.workspace.getConfiguration("d2v").get("autoOpenPreview", false)) {
+    const doc = vscode.window.activeTextEditor?.document;
+    if (doc && looksLikeTopology(doc)) {
+      FocusPreviewPanel.createOrShow(context).refreshFromActiveEditor();
+    }
   }
 }
 

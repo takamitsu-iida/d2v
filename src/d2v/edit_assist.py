@@ -101,6 +101,31 @@ def _parse_spans(text: str) -> "tuple[list[_Span], dict[str, int]]":
                 _Span(uniq, "connection", item.start_mark.line, item.end_mark.line)
             )
 
+    l2 = _get(nm, "layer2-layer")
+    if l2 is not None:
+        lag_seq = _get(l2, "link-aggregation")
+        if isinstance(lag_seq, yaml.SequenceNode):
+            for item in lag_seq.value:
+                did_node = _get(item, "device-id")
+                if not isinstance(did_node, yaml.ScalarNode):
+                    continue
+                spans.append(
+                    _Span([did_node.value], "link-aggregation", item.start_mark.line, item.end_mark.line)
+                )
+
+    l3 = _get(nm, "layer3-layer")
+    if l3 is not None:
+        for section_key in ("layer3-interface-config", "first-hop-redundancy", "routing-config"):
+            seq = _get(l3, section_key)
+            if isinstance(seq, yaml.SequenceNode):
+                for item in seq.value:
+                    did_node = _get(item, "device-id")
+                    if not isinstance(did_node, yaml.ScalarNode):
+                        continue
+                    spans.append(
+                        _Span([did_node.value], section_key, item.start_mark.line, item.end_mark.line)
+                    )
+
     return spans, device_lines
 
 

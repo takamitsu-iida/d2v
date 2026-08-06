@@ -37,7 +37,7 @@ def test_resolve_fallback_to_nearest_above():
     # 末尾（最後のブロックより下）でも直前のブロックにフォールバックする
     res = edit_assist.resolve_focus(_YAML, len(_LINES) + 5)
     assert res.focus_ids  # 空でない
-    assert res.context in ("device", "connection")
+    assert res.context != "none"
 
 
 def test_resolve_broken_yaml_returns_empty():

@@ -101,6 +101,15 @@ network-model:
             description: "LAN"
             ip-address: "10.1.3.10/24"
 
+#      - device-id: "unknown-1"
+#        device-name: "ゲスト端末"
+#        device-type: host
+#        zone: 隔離
+#        interface:
+#          - interface-id: "GigabitEthernet0/0"
+#            description: "link description"
+#            ip-address: "dhcp"
+
     physical-connection:
       - connection-id: "router-01__fw-01"
         endpoint:
@@ -163,6 +172,9 @@ network-model:
             interface-id: "GigabitEthernet0/2"
           - device-id: "pc-01"
             interface-id: "eth0"
+
+
+
 
   layer2-layer:
     vlan:

@@ -38,6 +38,11 @@
         "command": "d2v.clearSuppressedLints",
         "title": "d2v: 非表示にした design lint を復元",
         "category": "d2v"
+      },
+      {
+        "command": "d2v.startServer",
+        "title": "d2v: サーバーを起動",
+        "category": "d2v"
       }
     ],
     "menus": {
@@ -99,9 +104,27 @@
           "type": "boolean",
           "default": true,
           "description": "design lint（ポリシー違反の波線・診断）を表示する。false にすると波線を出さない。"
+        },
+        "d2v.serverCommand": {
+          "type": "string",
+          "default": "uv run python main.py serve",
+          "description": "「d2v: サーバーを起動」コマンドで実行するシェルコマンド。"
+        },
+        "d2v.autoOpenPreview": {
+          "type": "boolean",
+          "default": false,
+          "description": "topology YAML をアクティブにしたとき自動でフォーカスプレビューを開く。"
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "d2v.openFocusPreview",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d",
+        "when": "editorLangId == yaml"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

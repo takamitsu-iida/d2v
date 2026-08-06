@@ -948,37 +948,61 @@ curl -s -X POST http://127.0.0.1:8000/api/v2d/jobs \
 **カーソル位置のノード（device）周辺の構成図をライブ表示**する VS Code 拡張を同梱しています。
 レンダリングは決定論経路（LLM 不使用）のため即時・無料で、編集のたびに再描画されます。
 
-- カーソルを動かすと、その device 周辺（N ホップ）の図が自動更新されます。
-  `physical-connection` 内にカーソルを置くと両端 2 台が対象になります。
-- ホップ数スライダー（1〜3）・追従 ON/OFF・図のノードクリックで YAML 定義行へジャンプ。
-- **design lint（波線）**・`device-id`/`interface-id` の**補完**・device/interface/接続の
-  **スニペット**（`d2v-device` など）で編集を支援します。
-- ローカルの `python main.py serve`（既定 `http://127.0.0.1:8000`）に接続します。
+### 起動手順
 
-
-まず、ターミナルを１枚開いてサーバを起動します。
+**1. 拡張機能のビルド（初回のみ）**
 
 ```bash
-cd d2v
-python main.py serve
-```
-
-別のターミナルを開いて拡張機能をビルドします。この処理は一度だけで構いません。
-
-```
 cd editor && npm install && npm run compile
 ```
 
-続いて VSCode を新規に開いて `editor/` ディレクトリを開きます。
+**2. 拡張開発ホストの起動**
 
-```
-code d2v/editor
-```
+`editor/` フォルダを VS Code で開き（`code d2v/editor`）、**F5** を押します。
+新しい VS Code ウィンドウ（拡張開発ホスト）が開きます。
 
-F5（Run Extension）を押すと拡張機能が起動し、さらに別のVSCodeのウィンドウが開きます。
+**3. サーバーの起動**
 
-そのウィンドウには **「d2v: フォーカスプレビューを開く」** というボタンが表示されています。
-YAMLファイルを開いてからボタンを押してください。
+拡張開発ホスト側で、コマンドパレット（`Ctrl+Shift+P`）から
+**「d2v: サーバーを起動」** を実行します。
+VS Code 内のターミナルで `uv run python main.py serve` が自動的に走ります。
+
+> サーバーに接続できないときは VS Code 通知に **「サーバーを起動」** ボタンが表示されます。
+> 起動コマンドは設定 `d2v.serverCommand` で変更できます（デフォルト: `uv run python main.py serve`）。
+
+**4. プレビューを開く**
+
+topology YAML を開いた状態で、以下のいずれかでプレビューを起動します。
+
+| 方法 | 操作 |
+|------|------|
+| キーボード | `Ctrl+Alt+D`（Mac: `Cmd+Alt+D`） |
+| タイトルバー | エディタ右上のアイコンボタン |
+| コマンドパレット | `d2v: フォーカスプレビューを開く` |
+
+> **自動表示したい場合**: 設定 `d2v.autoOpenPreview` を `true` にすると、
+> topology YAML をアクティブにするだけでプレビューが自動的に開きます。
+
+### プレビューの使い方
+
+- カーソルを動かすと、その device 周辺（N ホップ）の図が自動更新されます。
+  同じブロック内の移動は再生成をスキップするため、動作が軽快です。
+- **カーソル位置ごとのフォーカス対象：**
+
+  | カーソル位置 | 表示対象 |
+  |---|---|
+  | `physical-layer.device` 内 | そのデバイス 1 台 |
+  | `physical-connection` 内 | 両端デバイス 2 台 |
+  | `layer2-layer.link-aggregation` 内 | そのデバイス 1 台 |
+  | `layer3-layer.layer3-interface-config` / `first-hop-redundancy` / `routing-config` 内 | そのデバイス 1 台 |
+
+- ホップ数スライダー（0〜3）・追従 ON/OFF・図のノードクリックで YAML 定義行へジャンプ。
+
+### 編集支援機能
+
+- **design lint（波線）**: 保存・オープン時にサーバの `/api/lint` を叩き、設計上の問題を該当行に波線表示。
+- **補完**: `device-id:`・`interface-id:` の値を既存定義から補完。
+- **スニペット**: `d2v-device` / `d2v-interface` / `d2v-connection` でテンプレートを展開。
 
 詳細は [editor/README.md](editor/README.md) を参照してください。
 
