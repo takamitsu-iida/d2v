@@ -1,0 +1,3 @@
+[submodule "yang"]
+	path = yang
+	url = https://github.com/takamitsu-iida/iida-network-model.git
